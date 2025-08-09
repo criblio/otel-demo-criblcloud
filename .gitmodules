@@ -1,3 +1,6 @@
 [submodule "opentelemetry-demo"]
 	path = opentelemetry-demo
 	url = https://github.com/open-telemetry/opentelemetry-demo
+[submodule "terraform-provider-criblio"]
+	path = terraform-provider-criblio
+	url = https://github.com/criblio/terraform-provider-criblio
