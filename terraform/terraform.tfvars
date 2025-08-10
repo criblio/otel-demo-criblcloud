@@ -6,7 +6,6 @@ workspace_id    = "your-workspace-id"  # required
 worker_group_id = "default"            # or your target Worker Group
 
 # Cribl Lake
-lake_id    = "your-lake-id"   # Lake that will contain the dataset
 dataset_id = "otel_demo"      # Dataset to create/use
 
 # Optional dataset settings

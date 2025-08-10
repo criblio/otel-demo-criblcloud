@@ -17,6 +17,7 @@ variable "worker_group_id" {
 variable "lake_id" {
   description = "Cribl Lake ID that contains datasets"
   type        = string
+  default     = "default"
 }
 
 variable "dataset_id" {
