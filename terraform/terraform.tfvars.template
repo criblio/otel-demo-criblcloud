@@ -1,8 +1,8 @@
 # Replace placeholder values before running terraform
 
 # Provider targeting (read by our configs for clarity; auth still uses env vars)
-organization_id = "your-org-id"        # e.g., friendly-vaughan-5pyvodc
-workspace_id    = "your-workspace-id"  # required
+organization_id = "your-org-id"
+workspace_id    = "main"  # required
 worker_group_id = "default"            # or your target Worker Group
 
 # Cribl Lake
@@ -14,4 +14,5 @@ dataset_id = "otel_demo"      # Dataset to create/use
 
 # OTLP Source (Basic Auth over gRPC)
 otlp_username = "otel_user"
-otlp_password = "change-me"
+otlp_password = "change-me
+otlp_port = 20000

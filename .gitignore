@@ -1,1 +1,19 @@
 .specstory
+
+# Environment files
+.env
+.env.*
+set_env.sh
+.envrc
+
+# Terraform files
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# OS files
+.DS_Store
+Thumbs.db
+
+terraform/terraform.tfvars
