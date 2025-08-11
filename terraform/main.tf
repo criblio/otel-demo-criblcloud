@@ -4,8 +4,9 @@ locals {
 
 # Create or update a dataset in the specified Lake
 resource "criblio_cribl_lake_dataset" "otel_demo" {
-  id      = var.dataset_id
+  id      = "otel_demo"
   lake_id = var.lake_id
+  bucket_name = "lake-${var.workspace_id}-${var.organization_id}"
 
   format                    = var.dataset_format
   retention_period_in_days  = var.dataset_retention_days
@@ -16,10 +17,32 @@ resource "criblio_destination" "otel_dataset" {
   id       = "otel_dataset"
   group_id = var.worker_group_id
 
-  output_dataset = {
-    id        = "otel_dataset"
-    type      = "dataset"
-    dest_path = criblio_cribl_lake_dataset.otel_demo.id
+  output_cribl_lake = {
+    id                                = "otel_dataset"
+    type                              = "cribl_lake"
+    description                       = "Cribl Lake destination for otel data"
+    disabled                          = false
+    streamtags                        = ["otel", "lake"]
+    dest_path                         = "default_logs"
+    format                            = "json"
+    compress                          = "gzip"
+    add_id_to_stage_path              = true
+    aws_authentication_method         = "auto"
+    base_file_name                    = "CriblOut"
+    file_name_suffix                  = "'.gz'"
+    max_file_size_mb                  = 32
+    max_open_files                    = 100
+    write_high_water_mark             = 64
+    on_backpressure                   = "block"
+    deadletter_enabled                = false
+    on_disk_full_backpressure         = "block"
+    max_file_open_time_sec            = 300
+    max_file_idle_time_sec            = 30
+    verify_permissions                = true
+    max_closing_files_to_backpressure = 100
+    max_concurrent_file_parts         = 1
+    empty_dir_cleanup_sec             = 300
+    max_retry_num                     = 20
   }
 }
 
@@ -28,21 +51,49 @@ resource "criblio_source" "otel_otlp" {
   id       = "otel_otlp"
   group_id = var.worker_group_id
 
+  depends_on = [criblio_destination.otel_dataset]
+
   input_open_telemetry = {
-    type         = "open_telemetry"
-    protocol     = var.otlp_protocol
-    port         = var.otlp_port
-    otlp_version = "1.3.1"
-
-    # Basic auth
-    auth_type = "basic"
-    username  = var.otlp_username
-    password  = var.otlp_password
-
-    send_to_routes = false
+    id                      = "otel_otlp"
+    type                    = "open_telemetry"
+    protocol                = var.otlp_protocol
+    port                    = var.otlp_port
+    otlp_version            = "1.3.1"
+    host                    = "0.0.0.0"
+    
+    # Basic auth (only when credentials are provided)
+    auth_type               = "basic"
+    username                = var.otlp_username
+    password                = var.otlp_password
+    auth_header_expr        = "true"
+   
+    
+    # Connection settings
+    send_to_routes          = false
     connections = [{
       output = criblio_destination.otel_dataset.id
     }]
+    
+    # OTLP specific settings
+    extract_logs            = false
+    extract_metrics         = false
+    extract_spans           = false
+    enable_health_check     = false
+    
+    # Network settings
+    ip_allowlist_regex      = "/.*/"
+    ip_denylist_regex       = "/^$/"
+    keep_alive_timeout      = 15
+    max_active_cxn          = 1000
+    max_active_req          = 256
+    max_requests_per_socket = 0
+    request_timeout          = 0
+    socket_timeout           = 0
+    
+    # Other settings
+    disabled                = false
+    streamtags              = []
+    token_timeout_secs      = 3600
   }
 }
 
