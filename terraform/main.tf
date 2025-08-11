@@ -4,7 +4,7 @@ locals {
 
 # Create or update a dataset in the specified Lake
 resource "criblio_cribl_lake_dataset" "otel_demo" {
-  id      = "otel_demo"
+  id      = var.dataset_id
   lake_id = var.lake_id
   bucket_name = "lake-${var.workspace_id}-${var.organization_id}"
 
@@ -13,17 +13,17 @@ resource "criblio_cribl_lake_dataset" "otel_demo" {
 }
 
 # Destination that writes to the dataset
-resource "criblio_destination" "otel_dataset" {
-  id       = "otel_dataset"
+resource "criblio_destination" "otel_demo" {
+  id       = "otel_demo"
   group_id = var.worker_group_id
 
   output_cribl_lake = {
-    id                                = "otel_dataset"
+    id                                = "otel_demo"
     type                              = "cribl_lake"
     description                       = "Cribl Lake destination for otel data"
     disabled                          = false
     streamtags                        = ["otel", "lake"]
-    dest_path                         = "default_logs"
+    dest_path                         = "otel_demo"
     format                            = "json"
     compress                          = "gzip"
     add_id_to_stage_path              = true
@@ -51,7 +51,7 @@ resource "criblio_source" "otel_otlp" {
   id       = "otel_otlp"
   group_id = var.worker_group_id
 
-  depends_on = [criblio_destination.otel_dataset]
+  depends_on = [criblio_destination.otel_demo]
 
   input_open_telemetry = {
     id                      = "otel_otlp"
@@ -71,7 +71,7 @@ resource "criblio_source" "otel_otlp" {
     # Connection settings
     send_to_routes          = false
     connections = [{
-      output = criblio_destination.otel_dataset.id
+      output = criblio_destination.otel_demo.id
     }]
     
     # OTLP specific settings
@@ -116,7 +116,7 @@ resource "criblio_deploy" "deploy" {
 
   depends_on = [
     criblio_cribl_lake_dataset.otel_demo,
-    criblio_destination.otel_dataset,
+    criblio_destination.otel_demo,
     criblio_source.otel_otlp,
     criblio_commit.apply,
   ]

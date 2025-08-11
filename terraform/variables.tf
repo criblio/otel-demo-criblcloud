@@ -35,7 +35,7 @@ variable "dataset_format" {
 variable "dataset_retention_days" {
   description = "Retention for dataset (days)"
   type        = number
-  default     = null
+  default     = 7
 }
 
 variable "otlp_protocol" {

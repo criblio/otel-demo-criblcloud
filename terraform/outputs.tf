@@ -5,7 +5,7 @@ output "dataset_id" {
 
 output "destination_id" {
   description = "Destination ID forwarding to dataset"
-  value       = criblio_destination.otel_dataset.id
+  value       = criblio_destination.otel_demo.id
 }
 
 output "otlp_endpoint" {
