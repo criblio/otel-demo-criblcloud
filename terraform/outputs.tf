@@ -12,3 +12,8 @@ output "otlp_endpoint" {
   description = "OTLP gRPC endpoint host:port (port only here; host depends on worker deployment)"
   value       = var.otlp_port
 }
+
+output "cribl_stream_endpoint" {
+  description = "Cribl Stream OTLP endpoint for external connections"
+  value       = "${var.workspace_id}-${var.organization_id}.cribl.cloud:${var.otlp_port}"
+}

@@ -23,7 +23,7 @@ resource "criblio_destination" "otel_demo" {
     description                       = "Cribl Lake destination for otel data"
     disabled                          = false
     streamtags                        = ["otel", "lake"]
-    dest_path                         = "otel_demo"
+    dest_path                         = criblio_cribl_lake_dataset.otel_demo.id
     format                            = "json"
     compress                          = "gzip"
     add_id_to_stage_path              = true
@@ -75,9 +75,9 @@ resource "criblio_source" "otel_otlp" {
     }]
     
     # OTLP specific settings
-    extract_logs            = false
-    extract_metrics         = false
-    extract_spans           = false
+    extract_logs            = true
+    extract_metrics         = true
+    extract_spans           = true
     enable_health_check     = false
     
     # Network settings
@@ -99,14 +99,22 @@ resource "criblio_source" "otel_otlp" {
 
 # Commit config changes
 resource "criblio_commit" "apply" {
-  message = local.commit_message
-  group   = var.worker_group_id
+  message   = local.commit_message
+  group     = var.worker_group_id
+  effective = true
+  
+  depends_on = [
+    criblio_cribl_lake_dataset.otel_demo,
+    criblio_destination.otel_demo,
+    criblio_source.otel_otlp,
+  ]
 }
 
 # Retrieve available config versions for the group
 # (Used to pick the most recent one for deployment)
 data "criblio_config_version" "versions" {
   id = var.worker_group_id
+  depends_on = [criblio_commit.apply]
 }
 
 # Deploy to the worker group using the latest config version
@@ -115,9 +123,6 @@ resource "criblio_deploy" "deploy" {
   version = try(element(data.criblio_config_version.versions.items, length(data.criblio_config_version.versions.items) - 1), "")
 
   depends_on = [
-    criblio_cribl_lake_dataset.otel_demo,
-    criblio_destination.otel_demo,
-    criblio_source.otel_otlp,
-    criblio_commit.apply,
+    data.criblio_config_version.versions,
   ]
 }
