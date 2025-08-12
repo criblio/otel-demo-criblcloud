@@ -61,6 +61,15 @@ resource "criblio_source" "otel_otlp" {
     otlp_version            = "1.3.1"
     host                    = "0.0.0.0"
     
+    # TLS configuration to enable encrypted connections
+    tls = {
+      disabled        = false
+      request_cert    = false
+      cert_path       = "$CRIBL_CLOUD_CRT"
+      min_version     = "TLSv1.2"
+      priv_key_path   = "$CRIBL_CLOUD_KEY"
+    }
+    
     # Basic auth (only when credentials are provided)
     auth_type               = "basic"
     username                = var.otlp_username

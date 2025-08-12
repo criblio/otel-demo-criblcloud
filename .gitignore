@@ -17,3 +17,7 @@ set_env.sh
 Thumbs.db
 
 terraform/terraform.tfvars
+
+k8s/bin
+k8s/backups
+k8s/helm-values-processed.yaml

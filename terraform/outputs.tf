@@ -15,5 +15,5 @@ output "otlp_endpoint" {
 
 output "cribl_stream_endpoint" {
   description = "Cribl Stream OTLP endpoint for external connections"
-  value       = "${var.workspace_id}-${var.organization_id}.cribl.cloud:${var.otlp_port}"
+  value       = "default.${var.workspace_id}.${var.organization_id}.cribl.cloud:${var.otlp_port}"
 }

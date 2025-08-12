@@ -1,72 +1,184 @@
-## Cribl Cloud: Lake dataset + OTLP Source via Terraform
+# OpenTelemetry Demo with Cribl Stream Integration
 
-This repo provisions a Cribl Lake dataset, a destination to that dataset, and an OpenTelemetry (OTLP) gRPC source with Basic Auth that ingests from the OpenTelemetry Demo. It also creates a commit and deploys the config to your Worker Group.
+This project demonstrates how to integrate the OpenTelemetry Demo application with Cribl Stream for advanced observability data processing and routing to Cribl Lake with Lakehouse acceleration.
 
-### Prerequisites
-- Terraform 1.6+
-- Cribl Cloud account and credentials
-- Network access to your Worker Group's OTLP port (default 4317)
+## Overview
 
-### Authenticate the provider
-Use either OAuth (recommended) or a bearer token.
+The demo combines:
+- **OpenTelemetry Demo**: A microservices-based e-commerce application with comprehensive telemetry
+- **Cribl Stream**: Cloud-based data processing and routing for observability data
+- **Cribl Lake**: Scalable data lake with Lakehouse acceleration for fast queries
+- **Local Observability**: Jaeger, Grafana, and Prometheus for immediate visualization
 
-```bash
-# OAuth (recommended)
-export CRIBL_CLIENT_ID=... \
-CRIBL_CLIENT_SECRET=... \
-CRIBL_ORGANIZATION_ID=... \
-CRIBL_WORKSPACE_ID=...
+## Architecture
 
-# OR bearer token
-# export CRIBL_BEARER_TOKEN=...
+```
+OpenTelemetry Demo (Kind Kubernetes) 
+    ↓ OTLP gRPC with TLS + Basic Auth
+Cribl Stream Cloud (Worker Group)
+    ↓ Processed & Routed Data
+Cribl Lake Dataset + Lakehouse Acceleration
+    ↓ Fast Queries & Analytics
+Local Dashboards (Jaeger, Grafana, Prometheus)
 ```
 
-### Configure variables
-Edit `terraform/terraform.tfvars` and replace placeholders:
+## Prerequisites
 
+Before starting, ensure you have the following installed:
+- **Terraform** (>= 1.0)
+- **kubectl** 
+- **kind** (Kubernetes in Docker)
+- **Helm** (>= 3.0)
+- **Docker**
+- **Access to Cribl Cloud** with appropriate permissions
+
+## Setup Guide
+
+### 1. Configure Cribl Stream Infrastructure
+
+First, set up the Cribl Stream source, destination, and Lake dataset:
+
+```bash
+cd terraform
+
+# Copy the template and configure your environment
+cp terraform.tfvars.template terraform.tfvars
+
+# Edit terraform.tfvars with your Cribl Cloud credentials:
+# - organization_id
+# - workspace_id  
+# - worker_group_id (usually "default")
+# - otlp_username and otlp_password for secure OTLP ingestion
+vim terraform.tfvars
+
+# Apply the Terraform configuration
+./run_terraform.sh apply
+```
+
+This will create:
+- **Cribl Lake Dataset** with Lakehouse acceleration enabled
+- **OTLP Source** with TLS and basic authentication
+- **Lake Destination** for processed data storage
+- **Accelerated fields** for fast querying: timestamp, service.name, trace.span_id, log.level, resource.service.name
+
+### 2. Deploy OpenTelemetry Demo to Kubernetes
+
+With Cribl Stream configured, deploy the demo application:
+
+```bash
+cd k8s
+
+# This script will:
+# 1. Create/use existing kind cluster
+# 2. Configure OpenTelemetry Collector with Cribl Stream endpoint
+# 3. Deploy the demo application via Helm
+# 4. Set up port-forwards for local access
+./scripts/setup-demo.sh
+```
+
+### 3. Access and Monitor
+
+Once deployed, access the services:
+
+| Service | URL | Purpose |
+|---------|-----|---------|
+| **Demo Frontend** | http://localhost:8080 | E-commerce application |
+| **Jaeger UI** | http://localhost:16686 | Distributed tracing |
+| **Grafana** | http://localhost:3000 | Metrics dashboards |
+| **Prometheus** | http://localhost:9090 | Metrics collection |
+
+### 4. Generate and Observe Data
+
+The demo automatically generates realistic telemetry data:
+- **Browse the store** at http://localhost:8080 to generate traces
+- **View traces** in Jaeger to see request flows
+- **Check metrics** in Grafana for service performance
+- **Monitor in Cribl Cloud** to see data flowing through Stream to Lake
+
+## Data Flow Details
+
+### Telemetry Generation
+The OpenTelemetry Demo generates:
+- **Traces**: Complete request journeys through 10+ microservices
+- **Metrics**: Service performance, business KPIs, and infrastructure metrics  
+- **Logs**: Structured application and infrastructure logs
+
+### Processing Pipeline
+1. **Collection**: OpenTelemetry Collector receives all telemetry
+2. **Routing**: Data sent to both local backends AND Cribl Stream
+3. **Processing**: Cribl Stream processes and enriches data
+4. **Storage**: Data stored in Cribl Lake with Lakehouse acceleration
+5. **Analysis**: Fast queries enabled by accelerated fields
+
+## Configuration Options
+
+### Lakehouse Acceleration
+The deployment enables Lakehouse acceleration by default with these fields:
+- `timestamp` - for time-based filtering
+- `service.name` - for service-specific queries
+- `trace.span_id` - for trace correlation
+- `log.level` - for log severity filtering  
+- `resource.service.name` - for resource identification
+
+To customize, edit `terraform/variables.tf`:
 ```hcl
-organization_id = "your-org-id"        # e.g., friendly-vaughan-5pyvodc
-workspace_id    = "your-workspace-id"
-worker_group_id = "default"
-lake_id         = "your-lake-id"
-dataset_id      = "otel_demo"
-otlp_username   = "otel_user"
-otlp_password   = "change-me"
+variable "lakehouse_accelerated_fields" {
+  default = ["your", "custom", "fields"]
+}
 ```
 
-Optional dataset settings are commented in that file (`dataset_format`, `dataset_retention_days`).
+### OTLP Configuration
+Security and networking settings can be adjusted in `terraform/variables.tf`:
+- `otlp_protocol`: "grpc" or "http"
+- `otlp_port`: Default 4317 for gRPC
+- Authentication credentials for secure ingestion
 
-### Run Terraform
+## Monitoring and Troubleshooting
+
+### Check Kubernetes Status
 ```bash
-terraform -chdir=terraform init
-terraform -chdir=terraform apply
+kubectl get pods -n otel-demo
+kubectl logs -l app.kubernetes.io/name=opentelemetry-collector -n otel-demo
 ```
-On success, Terraform will:
-- Create/update the dataset in your Lake
-- Create a dataset destination
-- Create an OTLP source (gRPC 4317) with Basic Auth, connected directly to the destination
-- Commit and deploy the configuration to `worker_group_id`
 
-### Point the OpenTelemetry Demo at Cribl
-The source listens on gRPC port `4317` and requires Basic Auth. Configure OTLP exporter headers to send an Authorization header.
-
-Example using environment variables (replace host and creds):
+### Verify Cribl Stream Connection
 ```bash
-# Endpoint of your Cribl OTLP Source (host depends on your Worker Group ingress)
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://<your-host>:4317"
-export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
-
-# Basic Auth header (username:password -> base64)
-# Example for otel_user:change-me -> b3RlbF91c2VyOmNoYW5nZS1tZQ==
-export OTEL_EXPORTER_OTLP_HEADERS="authorization=Basic b3RlbF91c2VyOmNoYW5nZS1tZQ=="
+cd terraform
+terraform output cribl_stream_endpoint
 ```
-If the demo separates signal headers, set `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `..._METRICS_HEADERS`, and `..._LOGS_HEADERS` similarly.
 
-### Notes
-- Ensure your Worker Group ingress exposes the OTLP port and, if needed, restrict by IP allowlist or additional auth.
-- If the first apply deploys an older version, run apply again; we can adjust the deploy step after initial testing.
+### Monitor Data Flow
+- Check Cribl Stream UI for data ingestion
+- Verify Lake dataset has incoming data
+- Use Lakehouse for fast query performance
 
-### Cleaning up
+## Cleanup
+
+### Remove Kubernetes Resources
 ```bash
-terraform -chdir=terraform destroy
+kind delete cluster --name otel-demo-cribl
 ```
+
+### Remove Cribl Stream Configuration
+```bash
+cd terraform
+./run_terraform.sh destroy
+```
+
+## Documentation
+
+- [Terraform Configuration Details](terraform/README.md)
+- [Kubernetes Deployment Guide](k8s/README.md)  
+- [OpenTelemetry Demo Documentation](opentelemetry-demo/README.md)
+
+## Troubleshooting
+
+### Common Issues
+- **Port conflicts**: Ensure ports 8080, 16686, 3000, 9090 are available
+- **Terraform auth**: Verify Cribl Cloud credentials in terraform.tfvars
+- **Kind cluster**: Use `kind delete cluster --name otel-demo-cribl` to reset
+
+### Getting Help
+- Check the individual README files in `terraform/` and `k8s/` directories
+- Review Cribl documentation for Stream and Lake configuration
+- Examine OpenTelemetry Collector logs for connection issues
