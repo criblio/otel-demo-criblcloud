@@ -29,7 +29,7 @@ resource "criblio_destination" "otel_demo" {
     add_id_to_stage_path              = true
     aws_authentication_method         = "auto"
     base_file_name                    = "CriblOut"
-    file_name_suffix                  = "'.gz'"
+    file_name_suffix                  = ".gz"
     max_file_size_mb                  = 32
     max_open_files                    = 100
     write_high_water_mark             = 64
