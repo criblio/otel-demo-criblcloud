@@ -21,28 +21,7 @@ resource "criblio_destination" "otel_demo" {
     id                                = "otel_demo"
     type                              = "cribl_lake"
     description                       = "Cribl Lake destination for otel data"
-    disabled                          = false
-    streamtags                        = ["otel", "lake"]
     dest_path                         = criblio_cribl_lake_dataset.otel_demo.id
-    format                            = "json"
-    compress                          = "gzip"
-    add_id_to_stage_path              = true
-    aws_authentication_method         = "auto"
-    base_file_name                    = "CriblOut"
-    file_name_suffix                  = "'.gz'"
-    max_file_size_mb                  = 32
-    max_open_files                    = 100
-    write_high_water_mark             = 64
-    on_backpressure                   = "block"
-    deadletter_enabled                = false
-    on_disk_full_backpressure         = "block"
-    max_file_open_time_sec            = 300
-    max_file_idle_time_sec            = 30
-    verify_permissions                = true
-    max_closing_files_to_backpressure = 100
-    max_concurrent_file_parts         = 1
-    empty_dir_cleanup_sec             = 300
-    max_retry_num                     = 20
   }
 }
 
