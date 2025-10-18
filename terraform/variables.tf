@@ -63,3 +63,15 @@ variable "otlp_password" {
   sensitive   = true
   default     = null
 }
+
+variable "lakehouse_id" {
+  description = "Lakehouse ID for otel-demo dataset"
+  type        = string
+  default     = "otel-demo-lakehouse"
+}
+
+variable "lakehouse_tier_size" {
+  description = "Size of the lakehouse tier"
+  type        = string
+  default     = "small"
+}

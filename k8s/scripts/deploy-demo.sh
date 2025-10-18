@@ -105,9 +105,10 @@ pkill -f "kubectl.*port-forward" || true
 
 # Set up port forwards in background
 nohup kubectl port-forward svc/frontend-proxy 8080:8080 -n otel-demo > /dev/null 2>&1 &
-nohup kubectl port-forward svc/jaeger 16686:16686 -n otel-demo > /dev/null 2>&1 &
-nohup kubectl port-forward svc/grafana 3000:3000 -n otel-demo > /dev/null 2>&1 &
-nohup kubectl port-forward svc/prometheus-server 9090:9090 -n otel-demo > /dev/null 2>&1 &
+nohup kubectl port-forward svc/jaeger-query 16686:16686 -n otel-demo > /dev/null 2>&1 &
+nohup kubectl port-forward svc/grafana 3000:80 -n otel-demo > /dev/null 2>&1 &
+nohup kubectl port-forward svc/prometheus 9090:9090 -n otel-demo > /dev/null 2>&1 &
+nohup kubectl port-forward svc/opensearch 9300:9300 -n otel-demo > /dev/null 2>&1 &
 
 # Wait a bit for port forwards to establish
 sleep 3

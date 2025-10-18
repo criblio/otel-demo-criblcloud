@@ -2,6 +2,13 @@ locals {
   commit_message = "Provision OTLP source and Lake dataset for otel-demo"
 }
 
+# Create lakehouse for the otel_demo dataset
+resource "criblio_cribl_lake_house" "otel_demo" {
+  id          = var.lakehouse_id
+  description = "Lakehouse for OTEL demo dataset"
+  tier_size   = var.lakehouse_tier_size
+}
+
 # Create or update a dataset in the specified Lake
 resource "criblio_cribl_lake_dataset" "otel_demo" {
   id      = var.dataset_id
@@ -10,6 +17,21 @@ resource "criblio_cribl_lake_dataset" "otel_demo" {
 
   format                    = var.dataset_format
   retention_period_in_days  = var.dataset_retention_days
+}
+
+# Add a 15-minute delay before creating the dataset connection, this is to ensure the lakehouse is ready
+resource "null_resource" "delay_before_connection" {
+  provisioner "local-exec" {
+    command = "sleep 900"  # 900 seconds = 15 minutes
+  }
+}
+
+# Connect the lakehouse to the otel_demo dataset
+resource "criblio_lakehouse_dataset_connection" "otel_demo" {
+  lake_dataset_id = criblio_cribl_lake_dataset.otel_demo.id
+  lakehouse_id    = criblio_cribl_lake_house.otel_demo.id
+  
+  depends_on = [null_resource.delay_before_connection]
 }
 
 # Destination that writes to the dataset
@@ -29,14 +51,13 @@ resource "criblio_destination" "otel_demo" {
     add_id_to_stage_path              = true
     aws_authentication_method         = "auto"
     base_file_name                    = "CriblOut"
-    file_name_suffix                  = "'.gz'"
     max_file_size_mb                  = 32
     max_open_files                    = 100
     write_high_water_mark             = 64
     on_backpressure                   = "block"
     deadletter_enabled                = false
     on_disk_full_backpressure         = "block"
-    max_file_open_time_sec            = 300
+    max_file_open_time_sec            = 30
     max_file_idle_time_sec            = 30
     verify_permissions                = true
     max_closing_files_to_backpressure = 100
