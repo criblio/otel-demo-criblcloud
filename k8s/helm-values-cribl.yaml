@@ -4,7 +4,23 @@
 opentelemetry-collector:
   config:
     exporters:
-      # Add Cribl Stream exporter to existing exporters
+      # Base chart exporters that pipelines reference
+      otlp:
+        endpoint: jaeger:4317
+        tls:
+          insecure: true
+      debug: {}
+      opensearch:
+        http:
+          endpoint: http://opensearch:9200
+          tls:
+            insecure: true
+        logs_index: otel
+      otlphttp/prometheus:
+        endpoint: http://prometheus:9090/api/v1/otlp
+        tls:
+          insecure: true
+      # Cribl Stream exporter
       otlp/cribl:
         endpoint: "https://__CRIBL_ENDPOINT__"
         headers:
