@@ -3,20 +3,13 @@
 # Environment files
 .env
 .env.*
+!.env.example
 set_env.sh
 .envrc
-
-# Terraform files
-*.tfstate
-*.tfstate.*
-.terraform/
-.terraform.lock.hcl
 
 # OS files
 .DS_Store
 Thumbs.db
-
-terraform/terraform.tfvars
 
 k8s/bin
 k8s/backups

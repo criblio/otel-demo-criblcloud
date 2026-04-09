@@ -55,37 +55,33 @@ helm repo update
 echo "📦 Creating otel-demo namespace..."
 kubectl create namespace otel-demo --dry-run=client -o yaml | kubectl apply -f -
 
-# Process Helm values file with Cribl Stream configuration
-echo "🔧 Configuring OpenTelemetry collector for Cribl Stream..."
-CRIBL_CONFIG_FILE="$PROJECT_ROOT/terraform/terraform.tfvars"
+# Load Cribl configuration from .env
+echo "🔧 Configuring OpenTelemetry collector for Cribl Search..."
+ENV_FILE="$PROJECT_ROOT/.env"
 VALUES_TEMPLATE="$K8S_DIR/helm-values-cribl.yaml"
 VALUES_FILE="$K8S_DIR/helm-values-processed.yaml"
 
-# Read Cribl Stream configuration from terraform
-if [[ -f "$CRIBL_CONFIG_FILE" ]]; then
-    # Get endpoint from terraform output
-    CRIBL_ENDPOINT=$(cd "$PROJECT_ROOT/terraform" && terraform output -raw cribl_stream_endpoint 2>/dev/null)
-    # Get credentials from tfvars
-    CRIBL_USERNAME=$(grep '^otlp_username.*=' "$CRIBL_CONFIG_FILE" | sed 's/.*= *"//' | sed 's/".*//')
-    CRIBL_PASSWORD=$(grep '^otlp_password.*=' "$CRIBL_CONFIG_FILE" | sed 's/.*= *"//' | sed 's/".*//')
-    
-    if [[ -n "$CRIBL_ENDPOINT" && -n "$CRIBL_USERNAME" && -n "$CRIBL_PASSWORD" ]]; then
-        AUTH_HEADER=$(echo -n "${CRIBL_USERNAME}:${CRIBL_PASSWORD}" | base64 -w 0)
-        
-        # Process template
-        sed -e "s/__CRIBL_ENDPOINT__/${CRIBL_ENDPOINT}/g" \
-            -e "s/__AUTH_HEADER__/${AUTH_HEADER}/g" \
-            "$VALUES_TEMPLATE" > "$VALUES_FILE"
-            
-        echo "✅ Cribl Stream configuration loaded: https://$CRIBL_ENDPOINT"
-    else
-        echo "⚠️  Warning: Cribl Stream configuration not found, using default values"
-        cp "$VALUES_TEMPLATE" "$VALUES_FILE"
-    fi
-else
-    echo "⚠️  Warning: terraform.tfvars not found, using default values"
-    cp "$VALUES_TEMPLATE" "$VALUES_FILE"
+if [[ ! -f "$ENV_FILE" ]]; then
+    echo "❌ Error: .env file not found at project root"
+    echo "   Copy .env.example to .env and fill in your Cribl Search configuration"
+    exit 1
 fi
+
+source "$ENV_FILE"
+
+if [[ -z "$CRIBL_ENDPOINT" || -z "$CRIBL_USERNAME" || -z "$CRIBL_PASSWORD" ]]; then
+    echo "❌ Error: Missing required configuration in .env"
+    echo "   Required: CRIBL_ENDPOINT, CRIBL_USERNAME, CRIBL_PASSWORD"
+    exit 1
+fi
+
+AUTH_HEADER=$(echo -n "${CRIBL_USERNAME}:${CRIBL_PASSWORD}" | base64 -w 0)
+
+sed -e "s/__CRIBL_ENDPOINT__/${CRIBL_ENDPOINT}/g" \
+    -e "s/__AUTH_HEADER__/${AUTH_HEADER}/g" \
+    "$VALUES_TEMPLATE" > "$VALUES_FILE"
+
+echo "✅ Cribl configuration loaded: https://$CRIBL_ENDPOINT"
 
 # Deploy using Helm
 echo "📦 Deploying OpenTelemetry demo with Helm..."
