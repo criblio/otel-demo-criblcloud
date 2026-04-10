@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import TimeRangePicker, { binSecondsFor } from '../components/TimeRangePicker';
+import TimeRangePicker from '../components/TimeRangePicker';
+import { binSecondsFor } from '../components/timeRanges';
 import LineChart, { type LineSeries } from '../components/LineChart';
 import TraceBriefList from '../components/TraceBriefList';
 import StatusBanner from '../components/StatusBanner';
@@ -296,8 +297,8 @@ export default function ServiceDetailPage() {
           </div>
           {loadingOps ? (
             <div className={s.skeletonRows}>
-              {[0, 1, 2, 3, 4, 5, 6].map((i) => (
-                <div key={i} style={{ width: `${50 + Math.random() * 40}%` }} />
+              {[85, 72, 90, 65, 78, 82, 60].map((w, i) => (
+                <div key={i} style={{ width: `${w}%` }} />
               ))}
             </div>
           ) : operations.length === 0 ? (
@@ -364,8 +365,8 @@ export default function ServiceDetailPage() {
             </div>
             {loadingDeps ? (
               <div className={s.skeletonRows}>
-                {[0, 1, 2, 3].map((i) => (
-                  <div key={i} style={{ width: `${40 + Math.random() * 40}%` }} />
+                {[75, 60, 80, 55].map((w, i) => (
+                  <div key={i} style={{ width: `${w}%` }} />
                 ))}
               </div>
             ) : upstream.length + downstream.length === 0 ? (

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import TimeRangePicker, { binSecondsFor } from '../components/TimeRangePicker';
+import TimeRangePicker from '../components/TimeRangePicker';
+import { binSecondsFor } from '../components/timeRanges';
 import Sparkline from '../components/Sparkline';
 import StatusBanner from '../components/StatusBanner';
 import TraceBriefList from '../components/TraceBriefList';
@@ -76,7 +77,8 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [sort, setSort] = useState<SortState>({ key: 'requests', dir: 'desc' });
-  const [lastRefresh, setLastRefresh] = useState<number>(Date.now());
+  // Lazy initializer keeps Date.now() out of the render body (purity rule).
+  const [lastRefresh, setLastRefresh] = useState<number>(() => Date.now());
 
   const fetchAll = useCallback(async () => {
     setError(null);
@@ -240,8 +242,8 @@ export default function HomePage() {
         </div>
         {loadingSummaries ? (
           <div className={s.tableSkeleton}>
-            {[0, 1, 2, 3, 4, 5, 6].map((i) => (
-              <div key={i} style={{ width: `${60 + Math.random() * 35}%` }} />
+            {[82, 75, 88, 70, 94, 66, 80].map((w, i) => (
+              <div key={i} style={{ width: `${w}%` }} />
             ))}
           </div>
         ) : sortedSummaries.length === 0 ? (

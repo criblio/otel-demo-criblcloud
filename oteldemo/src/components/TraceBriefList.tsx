@@ -40,11 +40,12 @@ export default function TraceBriefList({
       </div>
       {loading ? (
         <div className={s.skeleton}>
-          {[0, 1, 2, 3, 4].map((i) => (
+          {/* Deterministic widths — React's purity rule forbids Math.random in render. */}
+          {[80, 70, 85, 62, 75].map((w, i) => (
             <div
               key={i}
               className={s.skeletonBar}
-              style={{ width: `${60 + Math.random() * 30}%` }}
+              style={{ width: `${w}%` }}
             />
           ))}
         </div>
