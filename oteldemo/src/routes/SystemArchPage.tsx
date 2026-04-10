@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+// navigate() goes to /service/:name on click (dedicated Service detail route)
 import DependencyGraph from '../components/DependencyGraph';
 import StatusBanner from '../components/StatusBanner';
 import { getDependencies } from '../api/search';
@@ -101,9 +102,7 @@ export default function SystemArchPage() {
             edges={edges}
             width={dims.w}
             height={dims.h}
-            onNodeClick={(id) =>
-              navigate(`/search?service=${encodeURIComponent(id)}&lookback=${lookback}`)
-            }
+            onNodeClick={(id) => navigate(`/service/${encodeURIComponent(id)}`)}
           />
         )}
       </div>

@@ -12,16 +12,26 @@
     "deploy": "node scripts/deploy.mjs"
   },
   "dependencies": {
+    "d3-array": "^3.2.4",
     "d3-force": "^3.0.0",
+    "d3-scale": "^4.0.2",
     "d3-selection": "^3.0.0",
+    "d3-shape": "^3.2.0",
+    "d3-time": "^3.1.0",
+    "d3-time-format": "^4.1.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.14.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@types/d3-array": "^3.2.2",
     "@types/d3-force": "^3.0.10",
+    "@types/d3-scale": "^4.0.9",
     "@types/d3-selection": "^3.0.11",
+    "@types/d3-shape": "^3.1.8",
+    "@types/d3-time": "^3.0.4",
+    "@types/d3-time-format": "^4.0.3",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -38,9 +48,31 @@
   "description": "Visualize data from the OpenTelemetry demo",
   "author": "Clint Sharp",
   "navItems": [
-    { "path": "/search", "label": "Search" },
-    { "path": "/architecture", "label": "System Architecture" },
-    { "path": "/compare", "label": "Compare" },
-    { "path": "/trace/:traceId", "label": "Trace Detail", "hidden": true }
+    {
+      "path": "/",
+      "label": "Home"
+    },
+    {
+      "path": "/search",
+      "label": "Search"
+    },
+    {
+      "path": "/architecture",
+      "label": "System Architecture"
+    },
+    {
+      "path": "/compare",
+      "label": "Compare"
+    },
+    {
+      "path": "/service/:serviceName",
+      "label": "Service Detail",
+      "hidden": true
+    },
+    {
+      "path": "/trace/:traceId",
+      "label": "Trace Detail",
+      "hidden": true
+    }
   ]
 }

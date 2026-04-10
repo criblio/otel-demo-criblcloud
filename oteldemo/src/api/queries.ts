@@ -115,6 +115,127 @@ export function traceSpans(traceIds: string[]): string {
 }
 
 /**
+ * Per-service summary aggregated over the whole time window: request count,
+ * error count, duration percentiles. Powers the Home page service catalog.
+ */
+export function serviceSummary(): string {
+  return `${SPANS_BASE}
+    | extend svc=tostring(resource.attributes['service.name']),
+            dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
+            is_error=(tostring(status.code)=="2")
+    | summarize requests=count(),
+                errors=countif(is_error),
+                p50_us=percentile(dur_us, 50),
+                p95_us=percentile(dur_us, 95),
+                p99_us=percentile(dur_us, 99)
+      by svc
+    | extend error_rate=toreal(errors)/toreal(requests)
+    | sort by requests desc`;
+}
+
+/**
+ * Time-bucketed request count + p95 per service. Powers service-row
+ * sparklines on the Home page and the RED charts on the Service detail page.
+ *
+ * binSeconds controls the bucket width — 60 for 1m bins, 300 for 5m, etc.
+ * Callers typically pick a width that gives ~30–60 buckets across their
+ * time range so the sparklines have enough resolution without being noisy.
+ */
+export function serviceTimeSeries(binSeconds: number, service?: string): string {
+  const svcFilter = service ? `| where svc=="${service.replace(/"/g, '\\"')}"` : '';
+  return `${SPANS_BASE}
+    | extend svc=tostring(resource.attributes['service.name']),
+            dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
+            is_error=(tostring(status.code)=="2")
+    ${svcFilter}
+    | summarize requests=count(),
+                errors=countif(is_error),
+                p50_us=percentile(dur_us, 50),
+                p95_us=percentile(dur_us, 95),
+                p99_us=percentile(dur_us, 99)
+      by svc, bucket=bin(_time, ${binSeconds}s)
+    | sort by svc asc, bucket asc`;
+}
+
+/**
+ * Top operations for a service, sorted by volume. Each row includes counts,
+ * error rate, and percentile latencies — the core table on Service detail.
+ */
+export function serviceOperations(service: string): string {
+  const s = service.replace(/"/g, '\\"');
+  return `${SPANS_BASE}
+    | extend svc=tostring(resource.attributes['service.name']),
+            dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
+            is_error=(tostring(status.code)=="2")
+    | where svc=="${s}"
+    | summarize requests=count(),
+                errors=countif(is_error),
+                p50_us=percentile(dur_us, 50),
+                p95_us=percentile(dur_us, 95),
+                p99_us=percentile(dur_us, 99)
+      by name
+    | extend error_rate=toreal(errors)/toreal(requests)
+    | sort by requests desc
+    | limit 50`;
+}
+
+/**
+ * Traces sorted by trace duration descending — "slow traces" panel on
+ * the Home page. Optionally scoped to a service.
+ */
+export function slowestTraces(service?: string): string {
+  const svcFilter = service ? `| where svc=="${service.replace(/"/g, '\\"')}"` : '';
+  return `${SPANS_BASE}
+    | extend svc=tostring(resource.attributes['service.name'])
+    ${svcFilter}
+    | summarize first_seen=min(_time),
+                trace_start_ns=min(start_time_unix_nano),
+                trace_end_ns=max(end_time_unix_nano)
+      by trace_id
+    | extend trace_dur_us=(toreal(trace_end_ns)-toreal(trace_start_ns))/1000.0
+    | sort by trace_dur_us desc
+    | limit 20`;
+}
+
+/**
+ * Traces that had at least one error span — "recent errors" panel on
+ * Home and Service detail. Optionally scoped to a service.
+ */
+export function recentErrorTraces(service?: string): string {
+  const svcFilter = service ? `| where svc=="${service.replace(/"/g, '\\"')}"` : '';
+  return `${SPANS_BASE}
+    | extend svc=tostring(resource.attributes['service.name']),
+            is_error=(tostring(status.code)=="2")
+    | where is_error
+    ${svcFilter}
+    | summarize first_seen=max(_time),
+                error_count=count()
+      by trace_id
+    | sort by first_seen desc
+    | limit 20`;
+}
+
+/**
+ * Structured logs emitted inside a trace. Logs in the otel dataset are
+ * distinguished from spans by having a body+severity and lacking
+ * end_time_unix_nano.
+ */
+export function traceLogs(traceId: string): string {
+  const t = traceId.replace(/"/g, '\\"');
+  return `dataset="otel"
+    | where isnotnull(body) and isnotnull(severity_number)
+    | where trace_id=="${t}"
+    | project _time, trace_id, span_id, body, severity_text, severity_number,
+              attributes,
+              service_name=tostring(resource.attributes['service.name']),
+              code_file=tostring(attributes['code.file.path']),
+              code_function=tostring(attributes['code.function.name']),
+              code_line=attributes['code.line.number']
+    | sort by _time asc
+    | limit 5000`;
+}
+
+/**
  * Service dependency edges via self-join on (trace_id, span_id↔parent_span_id).
  */
 export function dependencies(): string {

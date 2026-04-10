@@ -3,6 +3,7 @@ import { useState, type KeyboardEvent } from 'react';
 import s from './NavBar.module.css';
 
 const tabs = [
+  { label: 'Home', to: '/', end: true },
   { label: 'Search', to: '/search' },
   { label: 'Compare', to: '/compare' },
   { label: 'System Architecture', to: '/architecture' },
@@ -21,7 +22,7 @@ export default function NavBar() {
 
   return (
     <nav className={s.navbar}>
-      <NavLink to="/search" className={s.brand}>
+      <NavLink to="/" end className={s.brand}>
         <svg className={s.brandIcon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="11" cy="11" r="7" />
           <path d="M21 21l-4.35-4.35" />
@@ -34,6 +35,7 @@ export default function NavBar() {
           <NavLink
             key={t.to}
             to={t.to}
+            end={t.end}
             className={({ isActive }) => `${s.tab} ${isActive ? s.tabActive : ''}`}
           >
             {t.label}

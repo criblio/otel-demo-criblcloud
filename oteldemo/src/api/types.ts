@@ -61,6 +61,62 @@ export interface DependencyEdge {
   callCount: number;
 }
 
+/** Per-service rollup for the Home page catalog + Service detail header. */
+export interface ServiceSummary {
+  service: string;
+  requests: number;
+  errors: number;
+  errorRate: number; // 0..1
+  p50Us: number;
+  p95Us: number;
+  p99Us: number;
+}
+
+/** One time bucket of per-service aggregates; drives sparklines + RED charts. */
+export interface ServiceBucket {
+  service: string;
+  bucketMs: number; // epoch ms at bucket start
+  requests: number;
+  errors: number;
+  p50Us: number;
+  p95Us: number;
+  p99Us: number;
+}
+
+/** Per-operation rollup inside a service. */
+export interface OperationSummary {
+  operation: string;
+  requests: number;
+  errors: number;
+  errorRate: number;
+  p50Us: number;
+  p95Us: number;
+  p99Us: number;
+}
+
+/** Short summary of a trace for "slow traces" / "error traces" panels. */
+export interface TraceBrief {
+  traceID: string;
+  durationUs: number;
+  startTime: number; // μs
+  errorCount?: number;
+}
+
+/** A correlated log entry — trace_id + span_id matching the trace. */
+export interface TraceLogEntry {
+  time: number; // ms
+  traceID: string;
+  spanID: string;
+  service: string;
+  body: string;
+  severityText: string;
+  severityNumber: number;
+  codeFile?: string;
+  codeFunction?: string;
+  codeLine?: number;
+  attributes: Record<string, unknown>;
+}
+
 /** OTel span kind numeric values. */
 export const SpanKind: Record<number, string> = {
   0: 'UNSPECIFIED',
