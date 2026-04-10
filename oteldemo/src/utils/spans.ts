@@ -83,7 +83,23 @@ export function buildTimeline(trace: JaegerTrace): TraceTimeline {
   };
 }
 
-/** Stable hash → hue mapping for service colors. */
+/**
+ * Stable hash → hue mapping for service identity colors.
+ *
+ * Why identity (hash) colors and not health colors everywhere:
+ *   - The trace waterfall needs identity colors so you can visually follow
+ *     a call chain (cyan bar -> magenta -> green = load-generator ->
+ *     frontend -> product-catalog). Switching to health would collapse
+ *     every span to green/red and break that mental model.
+ *   - The Home catalog and System Architecture DO benefit from health
+ *     signaling, so those views add health as a secondary signal: Home
+ *     tints row backgrounds, Sys Arch fills nodes by health and draws a
+ *     subtle identity-hued ring around them.
+ *   - Compare and Logs use identity colors to keep services recognizable.
+ *
+ * So: identity colors are for *tracking a service across views*, health
+ * colors are for *scanning for problems*. Both signals live side by side.
+ */
 export function serviceColor(service: string): string {
   let hash = 0;
   for (let i = 0; i < service.length; i++) {

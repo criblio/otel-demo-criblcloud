@@ -12,6 +12,7 @@ import {
   listRecentErrorTraces,
 } from '../api/search';
 import { serviceColor } from '../utils/spans';
+import { serviceHealth, healthRowBg } from '../utils/health';
 import type {
   ServiceSummary,
   ServiceBucket,
@@ -33,7 +34,17 @@ interface SortState {
 }
 
 const DEFAULT_RANGE = '-1h';
-const REFRESH_INTERVAL_MS = 30_000;
+
+/** Auto-refresh interval options. 0 = off. */
+const REFRESH_OPTIONS: Array<{ label: string; ms: number }> = [
+  { label: 'Off', ms: 0 },
+  { label: '15s', ms: 15_000 },
+  { label: '30s', ms: 30_000 },
+  { label: '1m', ms: 60_000 },
+  { label: '2m', ms: 120_000 },
+  { label: '5m', ms: 300_000 },
+];
+const DEFAULT_REFRESH_MS = 60_000;
 
 function fmtRate(requestsPerMin: number): string {
   if (requestsPerMin >= 1000) return `${(requestsPerMin / 1000).toFixed(1)}k/min`;
@@ -75,7 +86,7 @@ export default function HomePage() {
   const [loadingSlow, setLoadingSlow] = useState(true);
   const [loadingErrors, setLoadingErrors] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [refreshMs, setRefreshMs] = useState<number>(DEFAULT_REFRESH_MS);
   const [sort, setSort] = useState<SortState>({ key: 'requests', dir: 'desc' });
   // Lazy initializer keeps Date.now() out of the render body (purity rule).
   const [lastRefresh, setLastRefresh] = useState<number>(() => Date.now());
@@ -122,18 +133,18 @@ export default function HomePage() {
     void fetchAll();
   }, [fetchAll]);
 
-  // Auto-refresh
+  // Auto-refresh with configurable interval. refreshMs === 0 disables.
   const timerRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!autoRefresh) return;
+    if (refreshMs <= 0) return;
     timerRef.current = window.setInterval(() => {
       void fetchAll();
-    }, REFRESH_INTERVAL_MS);
+    }, refreshMs);
     return () => {
       if (timerRef.current != null) window.clearInterval(timerRef.current);
       timerRef.current = null;
     };
-  }, [autoRefresh, fetchAll]);
+  }, [refreshMs, fetchAll]);
 
   // Group time-series buckets by service for sparklines
   const sparksByService = useMemo(() => {
@@ -206,19 +217,29 @@ export default function HomePage() {
         </div>
         <div className={s.heroControls}>
           <TimeRangePicker value={range} onChange={setRange} />
-          <button
-            type="button"
-            className={`${s.refreshBtn} ${autoRefresh ? s.refreshBtnActive : ''}`}
-            onClick={() => setAutoRefresh((v) => !v)}
-            title={
-              autoRefresh
-                ? `Auto-refresh every ${REFRESH_INTERVAL_MS / 1000}s — last: ${lastRefreshText}`
-                : `Auto-refresh paused — last: ${lastRefreshText}`
-            }
-          >
-            <span className={s.dot} />
-            {autoRefresh ? 'Live' : 'Paused'}
-          </button>
+          <div className={s.refreshPicker}>
+            <span
+              className={`${s.refreshStatusDot} ${refreshMs > 0 ? s.refreshStatusDotLive : ''}`}
+              title={
+                refreshMs > 0
+                  ? `Auto-refresh every ${refreshMs / 1000}s — last: ${lastRefreshText}`
+                  : `Auto-refresh off — last: ${lastRefreshText}`
+              }
+            />
+            <span className={s.refreshLabel}>Refresh</span>
+            <select
+              className={s.refreshSelect}
+              value={refreshMs}
+              onChange={(e) => setRefreshMs(Number(e.target.value))}
+              aria-label="Auto-refresh interval"
+            >
+              {REFRESH_OPTIONS.map((opt) => (
+                <option key={opt.ms} value={opt.ms}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <button type="button" className={s.refreshBtn} onClick={() => void fetchAll()}>
             Refresh now
           </button>
@@ -280,9 +301,12 @@ export default function HomePage() {
                 const err = fmtErrorRate(svc.errorRate);
                 const reqSpark = sparksByService.requests.get(svc.service) ?? [];
                 const p95Spark = sparksByService.p95.get(svc.service) ?? [];
+                const health = serviceHealth(svc);
+                const rowBg = healthRowBg(health.bucket);
                 return (
                   <tr
                     key={svc.service}
+                    style={rowBg !== 'transparent' ? { background: rowBg } : undefined}
                     onClick={() =>
                       (window.location.href = `./service/${encodeURIComponent(svc.service)}`)
                     }

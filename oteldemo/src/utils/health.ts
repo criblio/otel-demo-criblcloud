@@ -24,6 +24,21 @@ const HEALTH: Record<HealthBucket, { color: string; label: string }> = {
   idle: { color: '#9ca3af', label: 'No recent traffic' },
 };
 
+/** Very subtle row-background tint for a health bucket, matched to
+ * Cribl's semantic-token palette. Used by the Home catalog to scan
+ * for issues without overpowering the identity color dots. */
+const HEALTH_BG: Record<HealthBucket, string> = {
+  healthy: 'transparent',
+  watch: 'rgba(234, 179, 8, 0.08)',
+  warn: 'rgba(245, 158, 11, 0.12)',
+  critical: 'rgba(220, 38, 38, 0.12)',
+  idle: 'transparent',
+};
+
+export function healthRowBg(bucket: HealthBucket): string {
+  return HEALTH_BG[bucket];
+}
+
 export const HEALTH_LEGEND: Array<{ bucket: HealthBucket; color: string; label: string }> = [
   { bucket: 'healthy', ...HEALTH.healthy },
   { bucket: 'watch', ...HEALTH.watch },
