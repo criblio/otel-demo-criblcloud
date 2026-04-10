@@ -74,3 +74,27 @@
 .traceInput:focus {
   border-color: var(--cds-brand-teal);
 }
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-left: var(--cds-space-md);
+  color: var(--cds-color-fg-subtle);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--cds-radius-md);
+  cursor: pointer;
+  transition: all var(--cds-transition-fast);
+}
+.iconBtn:hover {
+  color: var(--cds-color-fg-inverse);
+  background: var(--cds-brand-navy-light);
+}
+.iconBtnActive {
+  color: var(--cds-brand-teal);
+  background: var(--cds-brand-navy-light);
+  border-color: rgba(255, 255, 255, 0.15);
+}

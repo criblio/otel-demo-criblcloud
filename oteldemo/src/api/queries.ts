@@ -1,15 +1,32 @@
 /**
  * KQL query builders for the Jaeger-clone views.
  *
- * All queries target the "otel" lakehouse dataset.
+ * Every query targets the current dataset (see api/dataset.ts). The dataset
+ * is injected via datasetBase() rather than a baked-in constant so the
+ * Settings page can switch it at runtime without a reload.
+ *
  * Spans are identified by isnotnull(end_time_unix_nano).
  */
+import { getCurrentDataset } from './dataset';
 
-const SPANS_BASE = `dataset="otel" | where isnotnull(end_time_unix_nano)`;
+function quoteDataset(): string {
+  // The dataset name must be a simple identifier to embed safely as
+  // dataset="...". We strip any non-safe characters as a cheap guard.
+  return getCurrentDataset().replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
+function datasetClause(): string {
+  return `dataset="${quoteDataset()}"`;
+}
+
+function spansBase(): string {
+  return `${datasetClause()} | where isnotnull(end_time_unix_nano)`;
+}
+
 
 /** All distinct service names. */
 export function services(): string {
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name'])
     | summarize by svc
     | sort by svc asc`;
@@ -18,7 +35,7 @@ export function services(): string {
 /** Operations for a given service. */
 export function operations(service: string): string {
   const s = service.replace(/"/g, '\\"');
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name'])
     | where svc=="${s}"
     | summarize by name
@@ -84,7 +101,7 @@ export function findTraces(params: FindTracesParams): string {
   const traceWhere = traceFilters.length ? `| where ${traceFilters.join(' and ')}` : '';
   const lim = params.limit ?? 20;
 
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name'])
     ${spanWhere}
     | summarize first_seen=min(_time),
@@ -103,7 +120,7 @@ export function findTraces(params: FindTracesParams): string {
  */
 export function traceSpans(traceIds: string[]): string {
   const inList = traceIds.map((id) => `"${id}"`).join(', ');
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | where trace_id in (${inList})
     | project _time, trace_id, span_id, parent_span_id, name, kind,
               start_time_unix_nano, end_time_unix_nano,
@@ -119,7 +136,7 @@ export function traceSpans(traceIds: string[]): string {
  * error count, duration percentiles. Powers the Home page service catalog.
  */
 export function serviceSummary(): string {
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
             dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
             is_error=(tostring(status.code)=="2")
@@ -143,7 +160,7 @@ export function serviceSummary(): string {
  */
 export function serviceTimeSeries(binSeconds: number, service?: string): string {
   const svcFilter = service ? `| where svc=="${service.replace(/"/g, '\\"')}"` : '';
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
             dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
             is_error=(tostring(status.code)=="2")
@@ -163,7 +180,7 @@ export function serviceTimeSeries(binSeconds: number, service?: string): string 
  */
 export function serviceOperations(service: string): string {
   const s = service.replace(/"/g, '\\"');
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
             dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
             is_error=(tostring(status.code)=="2")
@@ -185,7 +202,7 @@ export function serviceOperations(service: string): string {
  */
 export function slowestTraces(service?: string): string {
   const svcFilter = service ? `| where svc=="${service.replace(/"/g, '\\"')}"` : '';
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name'])
     ${svcFilter}
     | summarize first_seen=min(_time),
@@ -210,7 +227,7 @@ export function slowestTraces(service?: string): string {
  * just "the root span's value."
  */
 export function rawSlowestTraces(limit: number = 500): string {
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
             parent=tostring(parent_span_id),
             is_root=(parent=="" or isempty(parent))
@@ -231,7 +248,7 @@ export function rawSlowestTraces(limit: number = 500): string {
  * recent error spans.
  */
 export function rawRecentErrorSpans(limit: number = 300): string {
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
              is_error=(tostring(status.code)=="2"),
              msg=tostring(status.message)
@@ -247,7 +264,7 @@ export function rawRecentErrorSpans(limit: number = 300): string {
  */
 export function recentErrorTraces(service?: string): string {
   const svcFilter = service ? `| where svc=="${service.replace(/"/g, '\\"')}"` : '';
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
             is_error=(tostring(status.code)=="2")
     | where is_error
@@ -266,7 +283,7 @@ export function recentErrorTraces(service?: string): string {
  */
 export function traceLogs(traceId: string): string {
   const t = traceId.replace(/"/g, '\\"');
-  return `dataset="otel"
+  return `${datasetClause()}
     | where isnotnull(body) and isnotnull(severity_number)
     | where trace_id=="${t}"
     | project _time, trace_id, span_id, body, severity_text, severity_number,
@@ -283,13 +300,13 @@ export function traceLogs(traceId: string): string {
  * Service dependency edges via self-join on (trace_id, span_id↔parent_span_id).
  */
 export function dependencies(): string {
-  return `${SPANS_BASE}
+  return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
             parent=tostring(parent_span_id)
     | where parent != "" and isnotempty(parent)
     | project trace_id, parent, svc
     | join kind=inner (
-        ${SPANS_BASE}
+        ${spansBase()}
         | extend psvc=tostring(resource.attributes['service.name']),
                 psid=tostring(span_id)
         | project trace_id, psid, psvc
