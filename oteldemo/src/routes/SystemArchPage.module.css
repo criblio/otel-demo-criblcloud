@@ -47,12 +47,47 @@
   gap: var(--cds-space-xl);
   font-size: var(--cds-font-size-sm);
   color: var(--cds-color-fg-muted);
+  align-items: center;
 }
 
 .statValue {
   font-weight: var(--cds-font-weight-semibold);
   color: var(--cds-color-fg);
   font-variant-numeric: tabular-nums;
+}
+
+.unhealthy {
+  padding: 2px 8px;
+  background: var(--cds-color-danger-subtle);
+  color: var(--cds-color-danger);
+  border-radius: var(--cds-radius-sm);
+  font-weight: var(--cds-font-weight-semibold);
+  font-size: var(--cds-font-size-xs);
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: var(--cds-space-sm);
+  margin-left: var(--cds-space-lg);
+  padding-left: var(--cds-space-lg);
+  border-left: 1px solid var(--cds-color-border-subtle);
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-muted);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cds-space-xs);
+  text-transform: capitalize;
+}
+
+.legendDot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
 }
 
 .canvasWrap {

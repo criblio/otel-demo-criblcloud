@@ -8,11 +8,19 @@
  *
  * The simulation owns its node/link arrays via refs so d3 can mutate them in
  * place each tick — we then bump a counter via setState to schedule a render
- * pass that reads the latest positions. The react-hooks/refs lint rule
- * doesn't like "ref read during render," but the pattern is intentional and
- * scoped to this one file.
+ * pass that reads the latest positions.
+ *
+ * Nodes are:
+ *  - filled by *health* (error rate bucket — green / yellow / orange / red / gray)
+ *  - sized by *traffic* (log of request count)
+ *  - outlined by service identity hue (subtle) so two services with the
+ *    same health still look distinguishable
+ * On hover: show a floating NodeTooltip card with full stats + sparklines.
+ * On click: pin the tooltip in place (adds a close button); clicking the
+ *   same node or the background closes it. Navigation to the full service
+ *   detail page happens via the "View service detail →" link inside the
+ *   tooltip, so the click on the node itself is reserved for pinning.
  */
-/* eslint-disable react-hooks/refs */
 import { useEffect, useRef, useState, useMemo } from 'react';
 import {
   forceSimulation,
@@ -23,8 +31,14 @@ import {
   type SimulationNodeDatum,
   type SimulationLinkDatum,
 } from 'd3-force';
+import NodeTooltip from './NodeTooltip';
 import { serviceColor } from '../utils/spans';
-import type { DependencyEdge } from '../api/types';
+import { serviceHealth } from '../utils/health';
+import type {
+  DependencyEdge,
+  ServiceSummary,
+  ServiceBucket,
+} from '../api/types';
 
 interface SimNode extends SimulationNodeDatum {
   id: string;
@@ -36,19 +50,33 @@ interface SimLink extends SimulationLinkDatum<SimNode> {
 
 interface Props {
   edges: DependencyEdge[];
+  /** Per-service summary keyed by service name. Drives health color + tooltip. */
+  services: Map<string, ServiceSummary>;
+  /** Time buckets keyed by service name. Drives sparklines in the tooltip. */
+  bucketsByService: Map<string, ServiceBucket[]>;
   width: number;
   height: number;
-  onNodeClick: (id: string) => void;
 }
 
-export default function DependencyGraph({ edges, width, height, onNodeClick }: Props) {
+export default function DependencyGraph({
+  edges,
+  services,
+  bucketsByService,
+  width,
+  height,
+}: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hovered, setHovered] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string | null>(null);
 
   // Build nodes & links from edges (skip self-loops; aggregate edge counts).
   const { nodes, links } = useMemo(() => {
     const nodeMap = new Map<string, SimNode>();
     const linkAgg = new Map<string, SimLink>();
+    // Seed from services map so services without dependencies still appear.
+    for (const svc of services.keys()) {
+      if (!nodeMap.has(svc)) nodeMap.set(svc, { id: svc, size: 0 });
+    }
     for (const e of edges) {
       if (!nodeMap.has(e.parent)) nodeMap.set(e.parent, { id: e.parent, size: 0 });
       if (!nodeMap.has(e.child)) nodeMap.set(e.child, { id: e.child, size: 0 });
@@ -68,17 +96,20 @@ export default function DependencyGraph({ edges, width, height, onNodeClick }: P
       }
     }
     return { nodes: Array.from(nodeMap.values()), links: Array.from(linkAgg.values()) };
-  }, [edges]);
+  }, [edges, services]);
+
+  function nodeRadius(node: SimNode): number {
+    // Size by traffic (request count). Fall back to edge callCount if no summary.
+    const summary = services.get(node.id);
+    const volume = summary ? summary.requests : node.size;
+    return Math.max(10, Math.min(34, 10 + Math.log10(volume + 1) * 6));
+  }
 
   // Live positions tracked in state so React re-renders on each tick.
   // We mutate the simNodes objects in place — d3 owns them.
   const [, force] = useState(0); // bumped each tick to trigger re-renders
   const simNodesRef = useRef<SimNode[]>([]);
   const simLinksRef = useRef<SimLink[]>([]);
-
-  function nodeRadius(callCount: number): number {
-    return Math.max(8, Math.min(28, 8 + Math.log10(callCount + 1) * 5));
-  }
 
   useEffect(() => {
     // Clone so d3-force can mutate freely
@@ -92,14 +123,14 @@ export default function DependencyGraph({ edges, width, height, onNodeClick }: P
         'link',
         forceLink<SimNode, SimLink>(simLinks)
           .id((d) => d.id)
-          .distance(120)
-          .strength(0.6),
+          .distance(130)
+          .strength(0.5),
       )
-      .force('charge', forceManyBody().strength(-400))
+      .force('charge', forceManyBody().strength(-500))
       .force('center', forceCenter(width / 2, height / 2))
       .force(
         'collision',
-        forceCollide<SimNode>().radius((d) => nodeRadius(d.size) + 4),
+        forceCollide<SimNode>().radius((d) => nodeRadius(d) + 6),
       )
       .alphaDecay(0.04)
       .on('tick', () => {
@@ -109,99 +140,176 @@ export default function DependencyGraph({ edges, width, height, onNodeClick }: P
     return () => {
       sim.stop();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, links, width, height]);
 
-  return (
-    <svg
-      ref={svgRef}
-      width={width}
-      height={height}
-      style={{ display: 'block', cursor: 'default' }}
-    >
-      <defs>
-        <marker
-          id="arrowhead"
-          viewBox="0 -5 10 10"
-          refX="10"
-          refY="0"
-          markerWidth="5"
-          markerHeight="5"
-          orient="auto"
-        >
-          <path d="M0,-5L10,0L0,5" fill="#9ca3af" />
-        </marker>
-      </defs>
+  // The node that should show a tooltip — pinned takes precedence over hovered.
+  const focusId = pinned ?? hovered;
+  const focusNode = focusId
+    ? simNodesRef.current.find((n) => n.id === focusId)
+    : null;
 
-      {/* Edges */}
-      <g>
-        {simLinksRef.current.map((l, i) => {
-          const sx = (l.source as SimNode).x ?? 0;
-          const sy = (l.source as SimNode).y ?? 0;
-          const tx = (l.target as SimNode).x ?? 0;
-          const ty = (l.target as SimNode).y ?? 0;
-          const sourceId = (l.source as SimNode).id;
-          const targetId = (l.target as SimNode).id;
-          // Pull endpoint back so the arrowhead lands at the node edge
-          const dx = tx - sx;
-          const dy = ty - sy;
-          const dist = Math.max(1, Math.hypot(dx, dy));
-          const tradius = nodeRadius((l.target as SimNode).size);
-          const tEndX = tx - (dx / dist) * tradius;
-          const tEndY = ty - (dy / dist) * tradius;
-          const isHighlighted = hovered === sourceId || hovered === targetId;
+  // Position the tooltip to the right of the node if there's room, else left.
+  function tooltipPosition(node: SimNode): { left: number; top: number } {
+    const r = nodeRadius(node);
+    const nx = node.x ?? 0;
+    const ny = node.y ?? 0;
+    const tooltipW = 300;
+    const tooltipH = 400;
+    let left = nx + r + 12;
+    let top = ny - tooltipH / 2;
+    if (left + tooltipW > width) left = nx - r - 12 - tooltipW;
+    if (left < 8) left = 8;
+    if (top < 8) top = 8;
+    if (top + tooltipH > height) top = height - tooltipH - 8;
+    return { left, top };
+  }
+
+  return (
+    <div
+      style={{ position: 'relative', width, height }}
+      onClick={() => {
+        // Click on background (outside any node) dismisses the pinned tooltip
+        setPinned(null);
+      }}
+    >
+      <svg
+        ref={svgRef}
+        width={width}
+        height={height}
+        style={{ display: 'block', cursor: 'default' }}
+      >
+        <defs>
+          <marker
+            id="arrowhead"
+            viewBox="0 -5 10 10"
+            refX="10"
+            refY="0"
+            markerWidth="5"
+            markerHeight="5"
+            orient="auto"
+          >
+            <path d="M0,-5L10,0L0,5" fill="#9ca3af" />
+          </marker>
+          <marker
+            id="arrowheadActive"
+            viewBox="0 -5 10 10"
+            refX="10"
+            refY="0"
+            markerWidth="5"
+            markerHeight="5"
+            orient="auto"
+          >
+            <path d="M0,-5L10,0L0,5" fill="#0190ff" />
+          </marker>
+        </defs>
+
+        {/* Edges */}
+        <g>
+          {simLinksRef.current.map((l, i) => {
+            const sx = (l.source as SimNode).x ?? 0;
+            const sy = (l.source as SimNode).y ?? 0;
+            const tx = (l.target as SimNode).x ?? 0;
+            const ty = (l.target as SimNode).y ?? 0;
+            const sourceId = (l.source as SimNode).id;
+            const targetId = (l.target as SimNode).id;
+            // Pull endpoint back so the arrowhead lands at the node edge
+            const dx = tx - sx;
+            const dy = ty - sy;
+            const dist = Math.max(1, Math.hypot(dx, dy));
+            const tradius = nodeRadius(l.target as SimNode);
+            const tEndX = tx - (dx / dist) * tradius;
+            const tEndY = ty - (dy / dist) * tradius;
+            const isHighlighted =
+              focusId === sourceId || focusId === targetId;
+            return (
+              <line
+                key={i}
+                x1={sx}
+                y1={sy}
+                x2={tEndX}
+                y2={tEndY}
+                stroke={isHighlighted ? '#0190ff' : '#9ca3af'}
+                strokeOpacity={isHighlighted ? 0.9 : focusId ? 0.15 : 0.45}
+                strokeWidth={Math.max(1, Math.log10(l.value + 1))}
+                markerEnd={isHighlighted ? 'url(#arrowheadActive)' : 'url(#arrowhead)'}
+              />
+            );
+          })}
+        </g>
+
+        {/* Nodes */}
+        <g>
+          {simNodesRef.current.map((n) => {
+            const r = nodeRadius(n);
+            const x = n.x ?? 0;
+            const y = n.y ?? 0;
+            const summary = services.get(n.id);
+            const health = serviceHealth(summary);
+            const isFocused = focusId === n.id;
+            const isPinned = pinned === n.id;
+            const idColor = serviceColor(n.id);
+            return (
+              <g
+                key={n.id}
+                transform={`translate(${x},${y})`}
+                style={{ cursor: 'pointer' }}
+                onMouseEnter={() => setHovered(n.id)}
+                onMouseLeave={() => setHovered(null)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPinned((cur) => (cur === n.id ? null : n.id));
+                }}
+              >
+                {/* Outer ring: identity color, subtle when not focused */}
+                <circle
+                  r={r + 3}
+                  fill="none"
+                  stroke={idColor}
+                  strokeWidth={2}
+                  strokeOpacity={isFocused ? 0.9 : 0.35}
+                />
+                {/* Main disc: health-colored */}
+                <circle
+                  r={r}
+                  fill={health.color}
+                  stroke={isPinned ? '#1a1a2e' : 'rgba(0,0,0,0.15)'}
+                  strokeWidth={isPinned ? 2 : 1}
+                  opacity={focusId && !isFocused ? 0.35 : 1}
+                />
+                <text
+                  y={r + 14}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fontFamily='"Open Sans", sans-serif'
+                  fill="#1a1a2e"
+                  fontWeight={isFocused ? 600 : 500}
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}
+                >
+                  {n.id}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+      </svg>
+
+      {focusNode && (
+        (() => {
+          const { left, top } = tooltipPosition(focusNode);
           return (
-            <line
-              key={i}
-              x1={sx}
-              y1={sy}
-              x2={tEndX}
-              y2={tEndY}
-              stroke={isHighlighted ? '#0190ff' : '#9ca3af'}
-              strokeOpacity={isHighlighted ? 0.9 : 0.45}
-              strokeWidth={Math.max(1, Math.log10(l.value + 1))}
-              markerEnd="url(#arrowhead)"
+            <NodeTooltip
+              service={focusNode.id}
+              summary={services.get(focusNode.id)}
+              buckets={bucketsByService.get(focusNode.id) ?? []}
+              pinned={pinned === focusNode.id}
+              left={left}
+              top={top}
+              onClose={() => setPinned(null)}
             />
           );
-        })}
-      </g>
-
-      {/* Nodes */}
-      <g>
-        {simNodesRef.current.map((n) => {
-          const r = nodeRadius(n.size);
-          const x = n.x ?? 0;
-          const y = n.y ?? 0;
-          const isHovered = hovered === n.id;
-          return (
-            <g
-              key={n.id}
-              transform={`translate(${x},${y})`}
-              style={{ cursor: 'pointer' }}
-              onMouseEnter={() => setHovered(n.id)}
-              onMouseLeave={() => setHovered(null)}
-              onClick={() => onNodeClick(n.id)}
-            >
-              <circle
-                r={r}
-                fill={serviceColor(n.id)}
-                stroke={isHovered ? '#1a1a2e' : '#ffffff'}
-                strokeWidth={isHovered ? 2 : 1.5}
-                opacity={hovered && !isHovered ? 0.4 : 1}
-              />
-              <text
-                y={r + 12}
-                textAnchor="middle"
-                fontSize="11"
-                fontFamily='"Open Sans", sans-serif'
-                fill="#1a1a2e"
-                style={{ pointerEvents: 'none', userSelect: 'none' }}
-              >
-                {n.id}
-              </text>
-            </g>
-          );
-        })}
-      </g>
-    </svg>
+        })()
+      )}
+    </div>
   );
 }

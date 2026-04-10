@@ -1,10 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-// navigate() goes to /service/:name on click (dedicated Service detail route)
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import DependencyGraph from '../components/DependencyGraph';
 import StatusBanner from '../components/StatusBanner';
-import { getDependencies } from '../api/search';
-import type { DependencyEdge } from '../api/types';
+import {
+  getDependencies,
+  listServiceSummaries,
+  getServiceTimeSeries,
+} from '../api/search';
+import { binSecondsFor } from '../components/timeRanges';
+import { HEALTH_LEGEND } from '../utils/health';
+import type {
+  DependencyEdge,
+  ServiceSummary,
+  ServiceBucket,
+} from '../api/types';
 import s from './SystemArchPage.module.css';
 
 const LOOKBACKS = [
@@ -16,12 +25,13 @@ const LOOKBACKS = [
 
 export default function SystemArchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
 
   const lookback = searchParams.get('lookback') ?? '-1h';
   const [edges, setEdges] = useState<DependencyEdge[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [summaries, setSummaries] = useState<ServiceSummary[]>([]);
+  const [buckets, setBuckets] = useState<ServiceBucket[]>([]);
+  const [loadingDeps, setLoadingDeps] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dims, setDims] = useState({ w: 800, h: 600 });
 
@@ -36,21 +46,44 @@ export default function SystemArchPage() {
     return () => ro.disconnect();
   }, []);
 
-  // Fetch dependencies whenever lookback changes
+  // Fetch dependencies + service stats + time-series in parallel
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const binSeconds = binSecondsFor(lookback);
+    setLoadingDeps(true);
     setError(null);
-    getDependencies(lookback, 'now')
+
+    const pDeps = getDependencies(lookback, 'now')
       .then((e) => {
         if (!cancelled) setEdges(e);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+          setEdges([]);
+        }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setLoadingDeps(false);
       });
+
+    listServiceSummaries(lookback, 'now')
+      .then((r) => {
+        if (!cancelled) setSummaries(r);
+      })
+      .catch(() => {
+        if (!cancelled) setSummaries([]);
+      });
+
+    getServiceTimeSeries(binSeconds, undefined, lookback, 'now')
+      .then((r) => {
+        if (!cancelled) setBuckets(r);
+      })
+      .catch(() => {
+        if (!cancelled) setBuckets([]);
+      });
+
+    void pDeps;
     return () => {
       cancelled = true;
     };
@@ -62,11 +95,33 @@ export default function SystemArchPage() {
     setSearchParams(next, { replace: false });
   }
 
-  const services = new Set<string>();
+  // Build fast lookups used by the graph
+  const servicesMap = useMemo(() => {
+    const m = new Map<string, ServiceSummary>();
+    for (const sv of summaries) m.set(sv.service, sv);
+    return m;
+  }, [summaries]);
+
+  const bucketsByService = useMemo(() => {
+    const m = new Map<string, ServiceBucket[]>();
+    for (const b of buckets) {
+      if (!m.has(b.service)) m.set(b.service, []);
+      m.get(b.service)!.push(b);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => a.bucketMs - b.bucketMs);
+    return m;
+  }, [buckets]);
+
+  // Summary count prefers the services we have stats for, falling back to edges
+  const serviceNames = new Set<string>();
+  for (const sv of summaries) serviceNames.add(sv.service);
   for (const e of edges) {
-    services.add(e.parent);
-    services.add(e.child);
+    serviceNames.add(e.parent);
+    serviceNames.add(e.child);
   }
+
+  // Count unhealthy services for the toolbar summary
+  const unhealthyCount = summaries.filter((sv) => sv.errorRate > 0).length;
 
   return (
     <div className={s.page}>
@@ -79,30 +134,47 @@ export default function SystemArchPage() {
             </option>
           ))}
         </select>
+        <div className={s.legend}>
+          {HEALTH_LEGEND.map((h) => (
+            <span key={h.bucket} className={s.legendItem} title={h.label}>
+              <span className={s.legendDot} style={{ background: h.color }} />
+              {h.bucket}
+            </span>
+          ))}
+        </div>
         <div className={s.spacer} />
         <div className={s.stats}>
           <span>
-            Services <span className={s.statValue}>{services.size}</span>
+            Services <span className={s.statValue}>{serviceNames.size}</span>
           </span>
           <span>
-            Edges <span className={s.statValue}>{edges.filter((e) => e.parent !== e.child).length}</span>
+            Edges{' '}
+            <span className={s.statValue}>
+              {edges.filter((e) => e.parent !== e.child).length}
+            </span>
           </span>
+          {unhealthyCount > 0 && (
+            <span className={s.unhealthy}>
+              {unhealthyCount} with errors
+            </span>
+          )}
         </div>
       </div>
 
       {error && <StatusBanner kind="error">{error}</StatusBanner>}
 
       <div className={s.canvasWrap} ref={containerRef}>
-        {loading && <div className={s.empty}>Loading dependency graph…</div>}
-        {!loading && edges.length === 0 && !error && (
+        {loadingDeps && <div className={s.empty}>Loading dependency graph…</div>}
+        {!loadingDeps && edges.length === 0 && !error && (
           <div className={s.empty}>No service dependencies in this time range.</div>
         )}
-        {!loading && edges.length > 0 && (
+        {!loadingDeps && edges.length > 0 && (
           <DependencyGraph
             edges={edges}
+            services={servicesMap}
+            bucketsByService={bucketsByService}
             width={dims.w}
             height={dims.h}
-            onNodeClick={(id) => navigate(`/service/${encodeURIComponent(id)}`)}
           />
         )}
       </div>
