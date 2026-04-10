@@ -14,9 +14,11 @@
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import NodeTooltip from './NodeTooltip';
+import ZoomControls from './ZoomControls';
 import { serviceColor, serviceColorAtLightness } from '../utils/spans';
 import { serviceHealth } from '../utils/health';
 import { useForceLayout, type SimNode, type SimLink } from '../hooks/useForceLayout';
+import { usePanZoom } from '../hooks/usePanZoom';
 import type {
   DependencyEdge,
   ServiceSummary,
@@ -81,7 +83,18 @@ export default function IsometricGraph({
   width,
   height,
 }: Props) {
-  const svgRef = useRef<SVGSVGElement>(null);
+  const {
+    transform,
+    svgRef,
+    onBackgroundPointerDown,
+    onBackgroundPointerMove,
+    onBackgroundPointerUp,
+    screenToWorld,
+    worldToScreen,
+    zoomBy,
+    reset: resetPanZoom,
+    consumeLastPan,
+  } = usePanZoom(width, height);
   const [hovered, setHovered] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
 
@@ -216,9 +229,10 @@ export default function IsometricGraph({
     }
     const { x, y } = pointerSvgCoords(e);
     dragRef.current = { id: nodeId, startX: x, startY: y, hasMoved: false };
-    // Inverse-project the current pointer position into world coords so
-    // the simulation pin is in the same space as the other nodes.
-    const { x: wx, y: wy } = unprojectPoint(x, y - -CYL_HEIGHT, projection);
+    // Screen → scene (undo pan/zoom) → sim world (undo iso projection).
+    // Compensate for cylinder height so the pin tracks the top disc.
+    const { x: scx, y: scy } = screenToWorld(x, y + CYL_HEIGHT);
+    const { x: wx, y: wy } = unprojectPoint(scx, scy, projection);
     pinNode(nodeId, wx, wy);
   }
 
@@ -233,9 +247,8 @@ export default function IsometricGraph({
       drag.hasMoved = true;
     }
     if (drag.hasMoved) {
-      // Compensate for the cylinder height so the cursor tracks the top
-      // disc (where the user is visually grabbing).
-      const { x: wx, y: wy } = unprojectPoint(x, y + CYL_HEIGHT, projection);
+      const { x: scx, y: scy } = screenToWorld(x, y + CYL_HEIGHT);
+      const { x: wx, y: wy } = unprojectPoint(scx, scy, projection);
       pinNode(drag.id, wx, wy);
     }
   }
@@ -284,11 +297,16 @@ export default function IsometricGraph({
   }, [projectedNodes]);
 
   function tooltipPosition(px: number, py: number): { left: number; top: number } {
+    // (px, py) are scene-space (inside the pan/zoom group). Forward
+    // project through the pan/zoom transform so the tooltip tracks the
+    // cylinder as the user pans or zooms.
+    const { x: sx, y: sy } = worldToScreen(px, py);
+    const cylH = CYL_HEIGHT * transform.scale;
     const tooltipW = 300;
     const tooltipH = 400;
-    let left = px + 20;
-    let top = py - tooltipH / 2 - CYL_HEIGHT;
-    if (left + tooltipW > width) left = px - 20 - tooltipW;
+    let left = sx + 20;
+    let top = sy - tooltipH / 2 - cylH;
+    if (left + tooltipW > width) left = sx - 20 - tooltipW;
     if (left < 8) left = 8;
     if (top < 8) top = 8;
     if (top + tooltipH > height) top = height - tooltipH - 8;
@@ -298,13 +316,24 @@ export default function IsometricGraph({
   return (
     <div
       style={{ position: 'relative', width, height }}
-      onClick={() => setPinned(null)}
+      onClick={() => {
+        if (consumeLastPan()) return;
+        setPinned(null);
+      }}
     >
       <svg
         ref={svgRef}
         width={width}
         height={height}
-        style={{ display: 'block' }}
+        style={{
+          display: 'block',
+          cursor: 'grab',
+          touchAction: 'none',
+        }}
+        onPointerDown={onBackgroundPointerDown}
+        onPointerMove={onBackgroundPointerMove}
+        onPointerUp={onBackgroundPointerUp}
+        onPointerCancel={onBackgroundPointerUp}
       >
         <defs>
           {/* Soft floor grid gradient — gives the scene a base plane. */}
@@ -336,6 +365,8 @@ export default function IsometricGraph({
           </marker>
         </defs>
 
+        {/* Everything inside this group is affected by pan+zoom. */}
+        <g transform={`translate(${transform.tx},${transform.ty}) scale(${transform.scale})`}>
         {/* Floor plate — a large diamond suggesting the ground plane. */}
         <g opacity="0.5">
           {(() => {
@@ -514,7 +545,15 @@ export default function IsometricGraph({
             );
           })}
         </g>
+        </g>
       </svg>
+
+      <ZoomControls
+        scale={transform.scale}
+        onZoomIn={() => zoomBy(1.25)}
+        onZoomOut={() => zoomBy(1 / 1.25)}
+        onReset={resetPanZoom}
+      />
 
       {focusNode &&
         (() => {

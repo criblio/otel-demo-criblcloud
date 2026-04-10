@@ -29,9 +29,11 @@
 /* eslint-disable react-hooks/refs */
 import { useMemo, useRef, useState } from 'react';
 import NodeTooltip from './NodeTooltip';
+import ZoomControls from './ZoomControls';
 import { serviceColor } from '../utils/spans';
 import { serviceHealth } from '../utils/health';
 import { useForceLayout, type SimNode, type SimLink } from '../hooks/useForceLayout';
+import { usePanZoom } from '../hooks/usePanZoom';
 import type {
   DependencyEdge,
   ServiceSummary,
@@ -55,7 +57,18 @@ export default function DependencyGraph({
   width,
   height,
 }: Props) {
-  const svgRef = useRef<SVGSVGElement>(null);
+  const {
+    transform,
+    svgRef,
+    onBackgroundPointerDown,
+    onBackgroundPointerMove,
+    onBackgroundPointerUp,
+    screenToWorld,
+    worldToScreen,
+    zoomBy,
+    reset: resetPanZoom,
+    consumeLastPan,
+  } = usePanZoom(width, height);
   const [hovered, setHovered] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
 
@@ -117,16 +130,18 @@ export default function DependencyGraph({
     : null;
 
   // Position the tooltip next to the focused node, keeping it inside the
-  // canvas area.
+  // canvas area. World coords get forward-projected through the pan/zoom
+  // transform so the tooltip tracks the node as the user zooms or pans.
   function tooltipPosition(node: SimNode): { left: number; top: number } {
-    const r = nodeRadius(node);
+    const r = nodeRadius(node) * transform.scale;
     const nx = node.x ?? 0;
     const ny = node.y ?? 0;
+    const { x: sx, y: sy } = worldToScreen(nx, ny);
     const tooltipW = 300;
     const tooltipH = 400;
-    let left = nx + r + 12;
-    let top = ny - tooltipH / 2;
-    if (left + tooltipW > width) left = nx - r - 12 - tooltipW;
+    let left = sx + r + 12;
+    let top = sy - tooltipH / 2;
+    if (left + tooltipW > width) left = sx - r - 12 - tooltipW;
     if (left < 8) left = 8;
     if (top < 8) top = 8;
     if (top + tooltipH > height) top = height - tooltipH - 8;
@@ -150,9 +165,10 @@ export default function DependencyGraph({
     }
     const { x, y } = pointerSvgCoords(e);
     dragRef.current = { id: nodeId, startX: x, startY: y, hasMoved: false };
-    // Pin immediately so the node doesn't jitter under the pointer if
-    // the simulation is still running.
-    pinNode(nodeId, x, y);
+    // Pin immediately in *world* space so the node doesn't jitter under
+    // the pointer regardless of the current pan/zoom.
+    const { x: wx, y: wy } = screenToWorld(x, y);
+    pinNode(nodeId, wx, wy);
   }
 
   function onNodePointerMove(e: React.PointerEvent<SVGGElement>) {
@@ -166,7 +182,8 @@ export default function DependencyGraph({
       drag.hasMoved = true;
     }
     if (drag.hasMoved) {
-      pinNode(drag.id, x, y);
+      const { x: wx, y: wy } = screenToWorld(x, y);
+      pinNode(drag.id, wx, wy);
     }
   }
 
@@ -196,6 +213,9 @@ export default function DependencyGraph({
     <div
       style={{ position: 'relative', width, height }}
       onClick={() => {
+        // Suppress unpin if the user just finished a pan drag; a real
+        // click on the background should still unpin the tooltip.
+        if (consumeLastPan()) return;
         setPinned(null);
       }}
     >
@@ -203,7 +223,15 @@ export default function DependencyGraph({
         ref={svgRef}
         width={width}
         height={height}
-        style={{ display: 'block', cursor: 'default' }}
+        style={{
+          display: 'block',
+          cursor: 'grab',
+          touchAction: 'none',
+        }}
+        onPointerDown={onBackgroundPointerDown}
+        onPointerMove={onBackgroundPointerMove}
+        onPointerUp={onBackgroundPointerUp}
+        onPointerCancel={onBackgroundPointerUp}
       >
         <defs>
           <marker
@@ -230,6 +258,8 @@ export default function DependencyGraph({
           </marker>
         </defs>
 
+        {/* Everything inside this group is affected by pan+zoom. */}
+        <g transform={`translate(${transform.tx},${transform.ty}) scale(${transform.scale})`}>
         <g>
           {simLinksRef.current.map((l, i) => {
             const sx = (l.source as SimNode).x ?? 0;
@@ -347,7 +377,15 @@ export default function DependencyGraph({
             );
           })}
         </g>
+        </g>
       </svg>
+
+      <ZoomControls
+        scale={transform.scale}
+        onZoomIn={() => zoomBy(1.25)}
+        onZoomOut={() => zoomBy(1 / 1.25)}
+        onReset={resetPanZoom}
+      />
 
       {focusNode &&
         (() => {
