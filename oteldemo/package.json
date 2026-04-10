@@ -36,5 +36,11 @@
   },
   "displayName": "OpenTelemetry Demo",
   "description": "Visualize data from the OpenTelemetry demo",
-  "author": "Clint Sharp"
+  "author": "Clint Sharp",
+  "navItems": [
+    { "path": "/search", "label": "Search" },
+    { "path": "/architecture", "label": "System Architecture" },
+    { "path": "/compare", "label": "Compare" },
+    { "path": "/trace/:traceId", "label": "Trace Detail", "hidden": true }
+  ]
 }

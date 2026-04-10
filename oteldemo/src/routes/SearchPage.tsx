@@ -43,13 +43,18 @@ export default function SearchPage() {
     setLoading(true);
     setError(null);
     try {
+      // Form inputs are in milliseconds (matches Jaeger UX); the KQL layer
+      // expects microseconds because OTel nanosecond timestamps convert
+      // cleanly to μs. Multiply here at the boundary.
+      const minMs = state.minDuration.trim() ? Number(state.minDuration) : NaN;
+      const maxMs = state.maxDuration.trim() ? Number(state.maxDuration) : NaN;
       const result = await findTraces(
         {
           service: state.service || undefined,
           operation: state.operation || undefined,
           tags: state.tags || undefined,
-          minDuration: state.minDuration ? Number(state.minDuration) : undefined,
-          maxDuration: state.maxDuration ? Number(state.maxDuration) : undefined,
+          minDurationUs: Number.isFinite(minMs) && minMs >= 0 ? minMs * 1000 : undefined,
+          maxDurationUs: Number.isFinite(maxMs) && maxMs > 0 ? maxMs * 1000 : undefined,
           limit: state.limit,
         },
         state.lookback,

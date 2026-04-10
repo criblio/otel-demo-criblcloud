@@ -104,6 +104,26 @@ oteldemo/
 └── vite.config.ts          # Vite + Cribl App Platform plugins
 ```
 
+## Known limitation — external deep links are flattened by the host
+
+The Cribl App Platform host router strips sub-paths and query strings from
+any externally-loaded app URL. Navigating a browser directly to
+`/apps/oteldemo/trace/abc123`, `/apps/oteldemo/architecture`, or
+`/apps/oteldemo/search?service=frontend` always lands on the app's default
+route (`/search`) with empty state. Internal navigation (clicking a tab,
+clicking a trace in the results table, navigating via `useNavigate()`) works
+fine — the URL bar updates via `CRIBL_NAV` postMessages from the iframe up
+to the parent, and back-button history works as expected.
+
+This means the app's routes are not currently shareable via pasted URLs. A
+bug has been filed upstream; when it's fixed, no app-side changes should be
+needed — the route definitions in `App.tsx` already cover the relevant
+deep-link patterns.
+
+The `navItems` entry in `package.json` declares the app's routes in case the
+host ever starts using it to permit deep-link navigation; it is harmless
+today if ignored.
+
 ## Visual style
 
 The chrome mirrors Cribl Search: dark navy nav bar, teal brand accent,

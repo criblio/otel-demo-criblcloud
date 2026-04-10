@@ -129,11 +129,12 @@ export default function SearchForm({ state, onSubmit, loading }: Props) {
       </div>
 
       <div className={s.field}>
-        <label className={s.label}>Min Duration (μs)</label>
+        <label className={s.label}>Min Duration (ms)</label>
         <input
           className={s.input}
           type="number"
           min="0"
+          step="1"
           placeholder="0"
           value={draft.minDuration}
           onChange={(e) => update('minDuration', e.target.value)}
@@ -142,11 +143,12 @@ export default function SearchForm({ state, onSubmit, loading }: Props) {
       </div>
 
       <div className={s.field}>
-        <label className={s.label}>Max Duration (μs)</label>
+        <label className={s.label}>Max Duration (ms)</label>
         <input
           className={s.input}
           type="number"
           min="0"
+          step="1"
           placeholder="∞"
           value={draft.maxDuration}
           onChange={(e) => update('maxDuration', e.target.value)}

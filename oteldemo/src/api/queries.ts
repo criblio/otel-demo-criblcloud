@@ -29,8 +29,8 @@ export interface FindTracesParams {
   service?: string;
   operation?: string;
   tags?: string; // free-form "key=value key2=value2"
-  minDuration?: number; // microseconds
-  maxDuration?: number; // microseconds
+  minDurationUs?: number; // microseconds (trace-level)
+  maxDurationUs?: number; // microseconds (trace-level)
   limit?: number;
 }
 
@@ -45,21 +45,17 @@ export interface FindTracesParams {
  * is not the root of the trace.
  */
 export function findTraces(params: FindTracesParams): string {
-  const filters: string[] = [];
+  // Per-span filters — applied BEFORE the summarize. These match "traces
+  // where a span with this (service, operation, tag) participated."
+  const spanFilters: string[] = [];
 
   if (params.service) {
     const s = params.service.replace(/"/g, '\\"');
-    filters.push(`svc=="${s}"`);
+    spanFilters.push(`svc=="${s}"`);
   }
   if (params.operation) {
     const o = params.operation.replace(/"/g, '\\"');
-    filters.push(`name=="${o}"`);
-  }
-  if (params.minDuration != null) {
-    filters.push(`dur_us >= ${params.minDuration}`);
-  }
-  if (params.maxDuration != null) {
-    filters.push(`dur_us <= ${params.maxDuration}`);
+    spanFilters.push(`name=="${o}"`);
   }
 
   // Tag filters: "error=true http.status_code=500"
@@ -69,18 +65,34 @@ export function findTraces(params: FindTracesParams): string {
       if (eq === -1) continue;
       const k = pair.slice(0, eq).replace(/"/g, '\\"');
       const v = pair.slice(eq + 1).replace(/"/g, '\\"');
-      filters.push(`tostring(attributes['${k}'])=="${v}"`);
+      spanFilters.push(`tostring(attributes['${k}'])=="${v}"`);
     }
   }
 
-  const where = filters.length ? `| where ${filters.join(' and ')}` : '';
+  // Trace-level filters — applied AFTER the summarize. Duration is the
+  // full (max_end − min_start) window of the spans that survived the per-span
+  // filter, matching Jaeger's semantics ("traces where X took ≥ N ms").
+  const traceFilters: string[] = [];
+  if (params.minDurationUs != null) {
+    traceFilters.push(`trace_dur_us >= ${params.minDurationUs}`);
+  }
+  if (params.maxDurationUs != null) {
+    traceFilters.push(`trace_dur_us <= ${params.maxDurationUs}`);
+  }
+
+  const spanWhere = spanFilters.length ? `| where ${spanFilters.join(' and ')}` : '';
+  const traceWhere = traceFilters.length ? `| where ${traceFilters.join(' and ')}` : '';
   const lim = params.limit ?? 20;
 
   return `${SPANS_BASE}
-    | extend svc=tostring(resource.attributes['service.name']),
-            dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0
-    ${where}
-    | summarize first_seen=min(_time) by trace_id
+    | extend svc=tostring(resource.attributes['service.name'])
+    ${spanWhere}
+    | summarize first_seen=min(_time),
+                trace_start_ns=min(start_time_unix_nano),
+                trace_end_ns=max(end_time_unix_nano)
+      by trace_id
+    | extend trace_dur_us=(toreal(trace_end_ns)-toreal(trace_start_ns))/1000.0
+    ${traceWhere}
     | sort by first_seen desc
     | limit ${lim}`;
 }
