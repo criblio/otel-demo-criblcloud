@@ -80,12 +80,40 @@ export default function TraceView() {
     () => trace?.spans.find((sp) => sp.spanID === selectedSpanId) ?? null,
     [trace, selectedSpanId],
   );
-  // Logs scoped to the selected span, used in the per-span accordion inside
-  // SpanDetail. Also fed into the main Logs tab as a quick-filter hint.
-  const logsForSelectedSpan = useMemo(
-    () => (selectedSpanId ? logs.filter((l) => l.spanID === selectedSpanId) : []),
-    [logs, selectedSpanId],
-  );
+
+  // Parent → children adjacency, computed once per trace.
+  const childrenBySpanId = useMemo(() => {
+    const m = new Map<string, string[]>();
+    if (!trace) return m;
+    for (const sp of trace.spans) {
+      const parent = sp.references.find((r) => r.refType === 'CHILD_OF');
+      if (!parent) continue;
+      if (!m.has(parent.spanID)) m.set(parent.spanID, []);
+      m.get(parent.spanID)!.push(sp.spanID);
+    }
+    return m;
+  }, [trace]);
+
+  // Logs scoped to the selected span OR any of its descendants — this is
+  // the intuitive "what ran under this span" semantic. OTel tags each log
+  // with the *innermost* active span, so filtering by equality alone on the
+  // root span would surface only the 1 load-generator log while hiding the
+  // 20+ downstream service logs that actually ran inside the checkout
+  // workflow. Walk the subtree DFS from the selected span and include any
+  // log whose span_id belongs to the resulting set.
+  const logsForSelectedSpan = useMemo(() => {
+    if (!selectedSpanId) return [] as TraceLogEntry[];
+    const descendants = new Set<string>();
+    const stack: string[] = [selectedSpanId];
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (descendants.has(id)) continue;
+      descendants.add(id);
+      const kids = childrenBySpanId.get(id);
+      if (kids) stack.push(...kids);
+    }
+    return logs.filter((l) => descendants.has(l.spanID));
+  }, [logs, selectedSpanId, childrenBySpanId]);
 
   if (loading) return <div className={s.loading}>Loading trace…</div>;
   if (error) return <div className={s.errorBox}>{error}</div>;
