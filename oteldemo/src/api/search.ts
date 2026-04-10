@@ -90,6 +90,32 @@ function toNum(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * Cribl Search returns nested objects either as parsed objects or as
+ * JSON-encoded strings depending on how the projection was written.
+ * Object.entries() on a string iterates characters, which blows up
+ * anything that renders attributes as key/value rows. Normalize to a
+ * plain object or empty.
+ */
+function toObject(v: unknown): Record<string, unknown> {
+  if (!v) return {};
+  if (typeof v === 'string') {
+    try {
+      const parsed = JSON.parse(v);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* not JSON */
+    }
+    return {};
+  }
+  if (typeof v === 'object' && !Array.isArray(v)) {
+    return v as Record<string, unknown>;
+  }
+  return {};
+}
+
 /** Fetch the per-service rollup. */
 export async function listServiceSummaries(
   earliest = '-1h',
@@ -201,6 +227,6 @@ export async function getTraceLogs(
     codeFile: r.code_file ? String(r.code_file) : undefined,
     codeFunction: r.code_function ? String(r.code_function) : undefined,
     codeLine: r.code_line != null ? toNum(r.code_line) : undefined,
-    attributes: (r.attributes as Record<string, unknown>) ?? {},
+    attributes: toObject(r.attributes),
   }));
 }

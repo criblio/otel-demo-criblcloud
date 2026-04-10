@@ -16,6 +16,19 @@ import type { TraceLogEntry } from '../api/types';
 import { serviceColor } from '../utils/spans';
 import s from './TraceLogsView.module.css';
 
+/** Stringify an attribute value the way a developer would want to read it. */
+function formatAttrValue(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+    return String(v);
+  }
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
 interface Props {
   logs: TraceLogEntry[];
   loading?: boolean;
@@ -205,7 +218,7 @@ export default function TraceLogsView({
                     {Object.entries(l.attributes).map(([ak, av]) => (
                       <div key={ak} className={s.detailsRow}>
                         <span className={s.detailsKey}>{ak}</span>
-                        <span className={s.detailsValue}>{String(av)}</span>
+                        <span className={s.detailsValue}>{formatAttrValue(av)}</span>
                       </div>
                     ))}
                   </div>
