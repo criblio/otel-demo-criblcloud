@@ -249,6 +249,22 @@ export default function DependencyGraph({
             const isFocused = focusId === n.id;
             const isPinned = pinned === n.id;
             const idColor = serviceColor(n.id);
+
+            // Health encoding: an offset halo ring around the node,
+            // sized/colored by bucket. Healthy nodes get no ring so
+            // the graph stays calm; unhealthy nodes stand out visually
+            // without hiding the identity fill color underneath.
+            const haloGap = 3;
+            const haloRadius = r + haloGap;
+            const haloWidth =
+              health.bucket === 'critical' ? 3.5
+              : health.bucket === 'warn' ? 3
+              : health.bucket === 'watch' ? 2
+              : health.bucket === 'idle' ? 1
+              : 0;
+            const haloDash =
+              health.bucket === 'idle' ? '3 3' : undefined;
+
             return (
               <g
                 key={n.id}
@@ -261,29 +277,53 @@ export default function DependencyGraph({
                   setPinned((cur) => (cur === n.id ? null : n.id));
                 }}
               >
-                {/* Outer ring: identity color, subtle when not focused */}
-                <circle
-                  r={r + 3}
-                  fill="none"
-                  stroke={idColor}
-                  strokeWidth={2}
-                  strokeOpacity={isFocused ? 0.9 : 0.35}
-                />
-                {/* Main disc: health-colored */}
+                {/* Health halo — only drawn for non-healthy buckets */}
+                {haloWidth > 0 && (
+                  <circle
+                    r={haloRadius}
+                    fill="none"
+                    stroke={health.color}
+                    strokeWidth={haloWidth}
+                    strokeDasharray={haloDash}
+                    strokeLinecap="round"
+                    opacity={focusId && !isFocused ? 0.35 : 0.85}
+                  >
+                    {health.bucket === 'critical' && (
+                      <>
+                        {/* Subtle pulse for critical nodes so they
+                            catch the eye during scan. */}
+                        <animate
+                          attributeName="r"
+                          values={`${haloRadius};${haloRadius + 3};${haloRadius}`}
+                          dur="1.8s"
+                          repeatCount="indefinite"
+                        />
+                        <animate
+                          attributeName="opacity"
+                          values="0.85;0.35;0.85"
+                          dur="1.8s"
+                          repeatCount="indefinite"
+                        />
+                      </>
+                    )}
+                  </circle>
+                )}
+                {/* Main disc — identity-colored for service consistency
+                    with the Home catalog, waterfall, and logs view. */}
                 <circle
                   r={r}
-                  fill={health.color}
-                  stroke={isPinned ? '#1a1a2e' : 'rgba(0,0,0,0.15)'}
+                  fill={idColor}
+                  stroke={isPinned ? '#1a1a2e' : 'rgba(0,0,0,0.2)'}
                   strokeWidth={isPinned ? 2 : 1}
                   opacity={focusId && !isFocused ? 0.35 : 1}
                 />
                 <text
-                  y={r + 14}
+                  y={r + haloGap + haloWidth + 12}
                   textAnchor="middle"
                   fontSize="11"
                   fontFamily='"Open Sans", sans-serif'
                   fill="#1a1a2e"
-                  fontWeight={isFocused ? 600 : 500}
+                  fontWeight={isFocused || health.bucket === 'critical' ? 600 : 500}
                   style={{ pointerEvents: 'none', userSelect: 'none' }}
                 >
                   {n.id}

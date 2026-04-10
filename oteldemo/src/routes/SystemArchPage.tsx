@@ -134,13 +134,28 @@ export default function SystemArchPage() {
             </option>
           ))}
         </select>
-        <div className={s.legend}>
-          {HEALTH_LEGEND.map((h) => (
-            <span key={h.bucket} className={s.legendItem} title={h.label}>
-              <span className={s.legendDot} style={{ background: h.color }} />
-              {h.bucket}
-            </span>
-          ))}
+        <div className={s.legend} title="Health is shown by the halo ring around each node">
+          {HEALTH_LEGEND.map((h) => {
+            const isHealthy = h.bucket === 'healthy';
+            const isIdle = h.bucket === 'idle';
+            return (
+              <span key={h.bucket} className={s.legendItem} title={h.label}>
+                <span className={s.legendSwatch}>
+                  <span className={s.legendSwatchDisc} />
+                  {!isHealthy && (
+                    <span
+                      className={s.legendSwatchRing}
+                      style={{
+                        borderColor: h.color,
+                        borderStyle: isIdle ? 'dashed' : 'solid',
+                      }}
+                    />
+                  )}
+                </span>
+                {h.bucket}
+              </span>
+            );
+          })}
         </div>
         <div className={s.spacer} />
         <div className={s.stats}>

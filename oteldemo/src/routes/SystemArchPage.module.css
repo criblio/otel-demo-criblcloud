@@ -90,6 +90,36 @@
   border-radius: 50%;
 }
 
+/* Legend swatches that mirror the graph's health-halo encoding: a neutral
+ * gray disc with a colored ring around it. Healthy has no ring; idle has
+ * a dashed ring. */
+.legendSwatch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+}
+
+.legendSwatchDisc {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cds-color-fg-subtle);
+}
+
+.legendSwatchRing {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-sizing: border-box;
+}
+
 .canvasWrap {
   flex: 1;
   position: relative;
