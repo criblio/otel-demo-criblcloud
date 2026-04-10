@@ -13,6 +13,8 @@ import {
   getDependencies,
 } from '../api/search';
 import { serviceColor } from '../utils/spans';
+import { previousWindow } from '../utils/timeRange';
+import DeltaChip from '../components/DeltaChip';
 import type {
   ServiceSummary,
   ServiceBucket,
@@ -63,8 +65,13 @@ export default function ServiceDetailPage() {
   const navigate = useNavigate();
   const [range, setRange] = useState(DEFAULT_RANGE);
   const [summary, setSummary] = useState<ServiceSummary | null>(null);
+  const [prevSummary, setPrevSummary] = useState<ServiceSummary | null>(null);
   const [buckets, setBuckets] = useState<ServiceBucket[]>([]);
   const [operations, setOperations] = useState<OperationSummary[]>([]);
+  const [opSort, setOpSort] = useState<{
+    key: 'operation' | 'requests' | 'errorRate' | 'p50Us' | 'p95Us' | 'p99Us';
+    dir: 'asc' | 'desc';
+  }>({ key: 'requests', dir: 'desc' });
   const [errorTraces, setErrorTraces] = useState<TraceBrief[]>([]);
   const [edges, setEdges] = useState<DependencyEdge[]>([]);
   const [loadingSummary, setLoadingSummary] = useState(true);
@@ -96,6 +103,12 @@ export default function ServiceDetailPage() {
         setError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => setLoadingSummary(false));
+
+    // Previous-window summary for the delta chips. Non-fatal on error.
+    const prev = previousWindow(range);
+    listServiceSummaries(prev.earliest, prev.latest)
+      .then((all) => setPrevSummary(all.find((x) => x.service === serviceName) ?? null))
+      .catch(() => setPrevSummary(null));
 
     getServiceTimeSeries(binSeconds, serviceName, range, 'now')
       .then((rows) => setBuckets(rows))
@@ -181,6 +194,43 @@ export default function ServiceDetailPage() {
     },
   ];
 
+  // Sort the operations table according to the user's click state.
+  // Default (requests desc) preserves the prior behavior — the
+  // sortable headers just *extend* the existing table with new orderings,
+  // notably p95/p99 which makes imageSlowLoad-style "one slow endpoint"
+  // failures easy to find.
+  const sortedOperations = useMemo(() => {
+    const arr = [...operations];
+    const { key, dir } = opSort;
+    arr.sort((a, b) => {
+      let av: number | string = 0;
+      let bv: number | string = 0;
+      if (key === 'operation') {
+        av = a.operation;
+        bv = b.operation;
+      } else {
+        av = a[key] ?? 0;
+        bv = b[key] ?? 0;
+      }
+      if (av < bv) return dir === 'asc' ? -1 : 1;
+      if (av > bv) return dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return arr;
+  }, [operations, opSort]);
+
+  function toggleOpSort(key: typeof opSort.key) {
+    setOpSort((cur) =>
+      cur.key === key
+        ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: key === 'operation' ? 'asc' : 'desc' },
+    );
+  }
+  function opSortIndicator(key: typeof opSort.key): string {
+    if (opSort.key !== key) return '';
+    return opSort.dir === 'desc' ? ' ▼' : ' ▲';
+  }
+
   // Derive upstream / downstream from dependencies
   const { upstream, downstream } = useMemo(() => {
     const up = edges
@@ -240,6 +290,12 @@ export default function ServiceDetailPage() {
             <span className={s.statLabel}>Rate</span>
             <span className={s.statValue}>
               {summary ? fmtRate(summary.requests / rangeMinutes) : '—'}
+              <DeltaChip
+                curr={summary ? summary.requests / rangeMinutes : undefined}
+                prev={prevSummary ? prevSummary.requests / rangeMinutes : undefined}
+                mode="relNeutral"
+                threshold={25}
+              />
             </span>
           </div>
           <div className={s.stat}>
@@ -248,11 +304,25 @@ export default function ServiceDetailPage() {
               className={`${s.statValue} ${summary && summary.errorRate > 0 ? s.statValueError : ''}`}
             >
               {summary ? `${(summary.errorRate * 100).toFixed(2)}%` : '—'}
+              <DeltaChip
+                curr={summary?.errorRate}
+                prev={prevSummary?.errorRate}
+                mode="points"
+                threshold={0.5}
+              />
             </span>
           </div>
           <div className={s.stat}>
             <span className={s.statLabel}>p95</span>
-            <span className={s.statValue}>{summary ? fmtUs(summary.p95Us) : '—'}</span>
+            <span className={s.statValue}>
+              {summary ? fmtUs(summary.p95Us) : '—'}
+              <DeltaChip
+                curr={summary?.p95Us}
+                prev={prevSummary?.p95Us}
+                mode="rel"
+                threshold={20}
+              />
+            </span>
           </div>
           <TimeRangePicker value={range} onChange={setRange} />
         </div>
@@ -307,16 +377,51 @@ export default function ServiceDetailPage() {
             <table className={s.opsTable}>
               <thead>
                 <tr>
-                  <th>Operation</th>
-                  <th className={s.num}>Requests</th>
-                  <th className={s.num}>Errors</th>
-                  <th className={s.num}>p50</th>
-                  <th className={s.num}>p95</th>
-                  <th className={s.num}>p99</th>
+                  <th
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => toggleOpSort('operation')}
+                  >
+                    Operation{opSortIndicator('operation')}
+                  </th>
+                  <th
+                    className={s.num}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => toggleOpSort('requests')}
+                  >
+                    Requests{opSortIndicator('requests')}
+                  </th>
+                  <th
+                    className={s.num}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => toggleOpSort('errorRate')}
+                  >
+                    Errors{opSortIndicator('errorRate')}
+                  </th>
+                  <th
+                    className={s.num}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => toggleOpSort('p50Us')}
+                  >
+                    p50{opSortIndicator('p50Us')}
+                  </th>
+                  <th
+                    className={s.num}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => toggleOpSort('p95Us')}
+                  >
+                    p95{opSortIndicator('p95Us')}
+                  </th>
+                  <th
+                    className={s.num}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => toggleOpSort('p99Us')}
+                  >
+                    p99{opSortIndicator('p99Us')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {operations.map((op) => (
+                {sortedOperations.map((op) => (
                   <tr
                     key={op.operation}
                     onClick={() =>

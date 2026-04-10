@@ -51,7 +51,13 @@ export function serviceHealth(summary: ServiceSummary | undefined): HealthInfo {
   if (!summary || summary.requests === 0) {
     return { bucket: 'idle', ...HEALTH.idle };
   }
-  const errPct = summary.errorRate * 100;
+  return healthFromRate(summary.errorRate);
+}
+
+/** Same bucketing logic, usable for anything with an error rate: edges, operations, ... */
+export function healthFromRate(errorRate: number, requests: number = 1): HealthInfo {
+  if (requests === 0) return { bucket: 'idle', ...HEALTH.idle };
+  const errPct = errorRate * 100;
   if (errPct >= 5) return { bucket: 'critical', ...HEALTH.critical };
   if (errPct >= 1) return { bucket: 'warn', ...HEALTH.warn };
   if (errPct > 0) return { bucket: 'watch', ...HEALTH.watch };

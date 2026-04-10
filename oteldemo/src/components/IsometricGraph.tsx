@@ -15,8 +15,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import NodeTooltip from './NodeTooltip';
 import ZoomControls from './ZoomControls';
-import { serviceColor, serviceColorAtLightness } from '../utils/spans';
-import { serviceHealth } from '../utils/health';
+import { serviceColor, serviceColorAtLightness, formatDurationUs } from '../utils/spans';
+import { serviceHealth, healthFromRate } from '../utils/health';
 import { useForceLayout, type SimNode, type SimLink } from '../hooks/useForceLayout';
 import { usePanZoom } from '../hooks/usePanZoom';
 import type {
@@ -122,8 +122,16 @@ export default function IsometricGraph({
       const existing = linkAgg.get(key);
       if (existing) {
         existing.value += e.callCount;
+        existing.errorCount += e.errorCount;
+        if (e.p95DurUs > existing.p95DurUs) existing.p95DurUs = e.p95DurUs;
       } else {
-        linkAgg.set(key, { source: e.parent, target: e.child, value: e.callCount });
+        linkAgg.set(key, {
+          source: e.parent,
+          target: e.child,
+          value: e.callCount,
+          errorCount: e.errorCount,
+          p95DurUs: e.p95DurUs,
+        });
       }
     }
     return {
@@ -405,6 +413,14 @@ export default function IsometricGraph({
             const tEndX = tx - (dx / dist) * tgt.r;
             const tEndY = ty - (dy / dist) * tgt.r * CYL_TOP_RY_RATIO;
             const isHighlighted = focusId === srcId || focusId === tgtId;
+            const edgeHealth = healthFromRate(
+              l.value > 0 ? l.errorCount / l.value : 0,
+              l.value,
+            );
+            const hasErrors =
+              edgeHealth.bucket !== 'healthy' && edgeHealth.bucket !== 'idle';
+            const baseStroke = hasErrors ? edgeHealth.color : '#9ca3af';
+            const stroke = isHighlighted ? '#0190ff' : baseStroke;
             return (
               <line
                 key={i}
@@ -412,13 +428,22 @@ export default function IsometricGraph({
                 y1={sy}
                 x2={tEndX}
                 y2={tEndY}
-                stroke={isHighlighted ? '#0190ff' : '#9ca3af'}
-                strokeOpacity={isHighlighted ? 0.95 : focusId ? 0.15 : 0.55}
-                strokeWidth={Math.max(1, Math.log10(l.value + 1))}
+                stroke={stroke}
+                strokeOpacity={
+                  isHighlighted ? 0.95 : focusId ? 0.15 : hasErrors ? 0.85 : 0.55
+                }
+                strokeWidth={Math.max(
+                  1,
+                  Math.log10(l.value + 1) + (hasErrors ? 1 : 0),
+                )}
                 markerEnd={
                   isHighlighted ? 'url(#isoArrowActive)' : 'url(#isoArrow)'
                 }
-              />
+              >
+                <title>
+                  {`${srcId} → ${tgtId}\n${l.value.toLocaleString()} calls, ${l.errorCount.toLocaleString()} errors (${((l.value > 0 ? l.errorCount / l.value : 0) * 100).toFixed(2)}%)\np95 ${formatDurationUs(l.p95DurUs)}`}
+                </title>
+              </line>
             );
           })}
         </g>

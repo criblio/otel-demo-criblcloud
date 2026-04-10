@@ -276,6 +276,74 @@ export function recentErrorTraces(service?: string): string {
     | limit 20`;
 }
 
+/** Parameters for the standalone Log Explorer query. */
+export interface SearchLogsParams {
+  service?: string;
+  /** Minimum severity_number (OTel scale: INFO=9, WARN=13, ERROR=17). */
+  minSeverity?: number;
+  /** Maximum severity_number — lets you carve out "only WARN, not ERROR". */
+  maxSeverity?: number;
+  /** Plain-text substring to match in the log body. Case-insensitive. */
+  bodyContains?: string;
+  limit?: number;
+}
+
+/**
+ * Standalone log search — no trace ID required. Powers the Log Explorer
+ * tab. Distinct from traceLogs() in that the latter is always scoped to
+ * a single trace, while this one roams across all logs in the dataset.
+ *
+ * Sort order is reverse-chronological so "most recent" is always at
+ * the top; the UI paginates from there.
+ */
+export function searchLogs(params: SearchLogsParams): string {
+  const filters: string[] = [
+    'isnotnull(body)',
+    'isnotnull(severity_number)',
+  ];
+
+  if (params.service) {
+    const s = params.service.replace(/"/g, '\\"');
+    filters.push(`tostring(resource.attributes['service.name'])=="${s}"`);
+  }
+  if (params.minSeverity != null) {
+    filters.push(`toreal(severity_number) >= ${params.minSeverity}`);
+  }
+  if (params.maxSeverity != null) {
+    filters.push(`toreal(severity_number) <= ${params.maxSeverity}`);
+  }
+  if (params.bodyContains) {
+    // Cribl's `contains` is case-insensitive by default on strings.
+    const needle = params.bodyContains.replace(/"/g, '\\"');
+    filters.push(`tostring(body) contains "${needle}"`);
+  }
+
+  const lim = params.limit ?? 200;
+  return `${datasetClause()}
+    | where ${filters.join(' and ')}
+    | project _time, trace_id, span_id, body, severity_text, severity_number,
+              attributes,
+              service_name=tostring(resource.attributes['service.name']),
+              pod_name=tostring(resource.attributes['k8s.pod.name']),
+              code_file=tostring(attributes['code.file.path']),
+              code_function=tostring(attributes['code.function.name']),
+              code_line=attributes['code.line.number']
+    | sort by _time desc
+    | limit ${lim}`;
+}
+
+/**
+ * All distinct services that have emitted logs. Smaller than the span
+ * services list because not every service logs structured events.
+ */
+export function logServices(): string {
+  return `${datasetClause()}
+    | where isnotnull(body) and isnotnull(severity_number)
+    | extend svc=tostring(resource.attributes['service.name'])
+    | summarize by svc
+    | sort by svc asc`;
+}
+
 /**
  * Structured logs emitted inside a trace. Logs in the otel dataset are
  * distinguished from spans by having a body+severity and lacking
@@ -298,13 +366,22 @@ export function traceLogs(traceId: string): string {
 
 /**
  * Service dependency edges via self-join on (trace_id, span_id↔parent_span_id).
+ *
+ * Each edge carries the caller → callee call count, error count, and p95
+ * latency of the CHILD span — the thing the caller was waiting on. Error
+ * is attributed to the child because that's where the failure happens
+ * even though the edge is lit "from the caller's perspective." This is
+ * what makes paymentUnreachable light up the checkout→payment edge
+ * instead of just the payment node.
  */
 export function dependencies(): string {
   return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
-            parent=tostring(parent_span_id)
+            parent=tostring(parent_span_id),
+            dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
+            is_error=(tostring(status.code)=="2")
     | where parent != "" and isnotempty(parent)
-    | project trace_id, parent, svc
+    | project trace_id, parent, svc, dur_us, is_error
     | join kind=inner (
         ${spansBase()}
         | extend psvc=tostring(resource.attributes['service.name']),
@@ -312,6 +389,9 @@ export function dependencies(): string {
         | project trace_id, psid, psvc
       ) on trace_id, $left.parent == $right.psid
     | where svc != psvc
-    | summarize callCount=count() by parent=psvc, child=svc
+    | summarize callCount=count(),
+                errorCount=countif(is_error),
+                p95DurUs=percentile(dur_us, 95)
+      by parent=psvc, child=svc
     | sort by callCount desc`;
 }

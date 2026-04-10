@@ -328,6 +328,37 @@ function percentile(values: number[], p: number): number {
   return sorted[idx];
 }
 
+/**
+ * Standalone log search — Log Explorer tab. Filters at the KQL level for
+ * service/severity/body text; returns most-recent-first.
+ */
+export async function searchLogs(
+  params: Q.SearchLogsParams,
+  earliest = '-1h',
+  latest = 'now',
+): Promise<TraceLogEntry[]> {
+  const rows = await runQuery(Q.searchLogs(params), earliest, latest, params.limit ?? 200);
+  return rows.map((r) => ({
+    time: toNum(r._time) * 1000,
+    traceID: String(r.trace_id ?? ''),
+    spanID: String(r.span_id ?? ''),
+    service: String(r.service_name ?? 'unknown'),
+    body: String(r.body ?? ''),
+    severityText: String(r.severity_text ?? ''),
+    severityNumber: toNum(r.severity_number),
+    codeFile: r.code_file ? String(r.code_file) : undefined,
+    codeFunction: r.code_function ? String(r.code_function) : undefined,
+    codeLine: r.code_line != null ? toNum(r.code_line) : undefined,
+    attributes: toObject(r.attributes),
+  }));
+}
+
+/** List distinct services that have emitted logs. */
+export async function listLogServices(earliest = '-1h'): Promise<string[]> {
+  const rows = await runQuery(Q.logServices(), earliest, 'now', 500);
+  return rows.map((r) => String(r.svc)).filter(Boolean);
+}
+
 /** Fetch logs correlated to a given trace. */
 export async function getTraceLogs(
   traceId: string,

@@ -12,6 +12,7 @@
  * narrow by severity.
  */
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { TraceLogEntry } from '../api/types';
 import { serviceColor } from '../utils/spans';
 import s from './TraceLogsView.module.css';
@@ -39,6 +40,12 @@ interface Props {
   referenceTimeMs?: number;
   /** When true, no filter bar is shown (used in compact per-span accordion). */
   compact?: boolean;
+  /**
+   * If true, replaces the relative-offset column with an absolute local
+   * time string ("14:23:07"). Used by the standalone Log Explorer where
+   * "offset from the first log in the result set" is meaningless.
+   */
+  absoluteTimestamps?: boolean;
 }
 
 /** Map OTel severity numbers to severity bucket. */
@@ -72,6 +79,7 @@ export default function TraceLogsView({
   emptyMessage = 'No logs correlated to this trace.',
   referenceTimeMs,
   compact,
+  absoluteTimestamps,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -179,7 +187,11 @@ export default function TraceLogsView({
                 className={`${s.row} ${isExpanded ? s.rowExpanded : ''}`}
                 onClick={() => toggle(k)}
               >
-                <div className={s.offset}>{fmtOffset(offsetMs)}</div>
+                <div className={s.offset}>
+                  {absoluteTimestamps
+                    ? new Date(l.time).toLocaleTimeString(undefined, { hour12: false })
+                    : fmtOffset(offsetMs)}
+                </div>
                 <div>
                   <span className={`${s.severity} ${sevClass}`}>
                     {sev === 'warn' ? 'WARN' : sev.toUpperCase()}
@@ -203,7 +215,19 @@ export default function TraceLogsView({
                     )}
                     <div className={s.detailsRow}>
                       <span className={s.detailsKey}>trace_id</span>
-                      <span className={s.detailsValue}>{l.traceID}</span>
+                      <span className={s.detailsValue}>
+                        {l.traceID ? (
+                          <Link
+                            to={`/trace/${l.traceID}`}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ color: 'var(--cds-color-accent)', textDecoration: 'none' }}
+                          >
+                            {l.traceID}
+                          </Link>
+                        ) : (
+                          '(none)'
+                        )}
+                      </span>
                     </div>
                     <div className={s.detailsRow}>
                       <span className={s.detailsKey}>span_id</span>

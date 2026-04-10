@@ -59,6 +59,9 @@ export interface DependencyEdge {
   parent: string;
   child: string;
   callCount: number;
+  errorCount: number;
+  /** p95 latency of the CHILD span on this edge, microseconds. */
+  p95DurUs: number;
 }
 
 /** Per-service rollup for the Home page catalog + Service detail header. */

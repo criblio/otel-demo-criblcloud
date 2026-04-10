@@ -176,5 +176,7 @@ export function toDependencyEdges(rows: Record<string, unknown>[]): DependencyEd
     parent: String(r.parent ?? r.parent_svc ?? ''),
     child: String(r.child ?? r.child_svc ?? ''),
     callCount: Number(r.callCount ?? 0),
+    errorCount: Number(r.errorCount ?? 0),
+    p95DurUs: Number(r.p95DurUs ?? 0),
   }));
 }

@@ -13,6 +13,8 @@ import {
 } from '../api/search';
 import { serviceColor } from '../utils/spans';
 import { serviceHealth, healthRowBg } from '../utils/health';
+import { previousWindow } from '../utils/timeRange';
+import DeltaChip from '../components/DeltaChip';
 import type {
   ServiceSummary,
   ServiceBucket,
@@ -79,6 +81,7 @@ function relativeTimeMs(rel: string): number {
 export default function HomePage() {
   const [range, setRange] = useState(DEFAULT_RANGE);
   const [summaries, setSummaries] = useState<ServiceSummary[]>([]);
+  const [prevSummaries, setPrevSummaries] = useState<ServiceSummary[]>([]);
   const [buckets, setBuckets] = useState<ServiceBucket[]>([]);
   const [slowClasses, setSlowClasses] = useState<SlowTraceClass[]>([]);
   const [errorClasses, setErrorClasses] = useState<ErrorClass[]>([]);
@@ -110,6 +113,13 @@ export default function HomePage() {
       })
       .finally(() => setLoadingSummaries(false));
 
+    // Previous window of the same length — fuels the delta-vs-baseline
+    // chips. Failure here is non-fatal; we just skip the chips.
+    const prev = previousWindow(range);
+    const pPrevSummaries = listServiceSummaries(prev.earliest, prev.latest)
+      .then((r) => setPrevSummaries(r))
+      .catch(() => setPrevSummaries([]));
+
     const pBuckets = getServiceTimeSeries(binSeconds, undefined, range, 'now')
       .then((r) => setBuckets(r))
       .catch(() => setBuckets([]))
@@ -125,7 +135,7 @@ export default function HomePage() {
       .catch(() => setErrorClasses([]))
       .finally(() => setLoadingErrors(false));
 
-    await Promise.allSettled([pSummaries, pBuckets, pSlow, pErrors]);
+    await Promise.allSettled([pSummaries, pPrevSummaries, pBuckets, pSlow, pErrors]);
     setLastRefresh(Date.now());
   }, [range]);
 
@@ -146,6 +156,13 @@ export default function HomePage() {
       timerRef.current = null;
     };
   }, [refreshMs, fetchAll]);
+
+  // Index previous-window summaries for O(1) lookup in the render loop.
+  const prevByService = useMemo(() => {
+    const m = new Map<string, ServiceSummary>();
+    for (const svc of prevSummaries) m.set(svc.service, svc);
+    return m;
+  }, [prevSummaries]);
 
   // Group time-series buckets by service for sparklines
   const sparksByService = useMemo(() => {
@@ -304,6 +321,8 @@ export default function HomePage() {
                 const p95Spark = sparksByService.p95.get(svc.service) ?? [];
                 const health = serviceHealth(svc);
                 const rowBg = healthRowBg(health.bucket);
+                const prev = prevByService.get(svc.service);
+                const prevReqPerMin = prev ? reqPerMin(prev.requests) : undefined;
                 return (
                   <tr
                     key={svc.service}
@@ -325,11 +344,31 @@ export default function HomePage() {
                     </td>
                     <td className={s.num}>
                       <strong>{fmtRate(reqPerMin(svc.requests))}</strong>
+                      <DeltaChip
+                        curr={reqPerMin(svc.requests)}
+                        prev={prevReqPerMin}
+                        mode="relNeutral"
+                        threshold={25}
+                      />
                     </td>
-                    <td className={`${s.num} ${err.className}`}>{err.text}</td>
+                    <td className={`${s.num} ${err.className}`}>
+                      {err.text}
+                      <DeltaChip
+                        curr={svc.errorRate}
+                        prev={prev?.errorRate}
+                        mode="points"
+                        threshold={0.5}
+                      />
+                    </td>
                     <td className={s.num}>{fmtUs(svc.p50Us)}</td>
                     <td className={s.num}>
                       <strong>{fmtUs(svc.p95Us)}</strong>
+                      <DeltaChip
+                        curr={svc.p95Us}
+                        prev={prev?.p95Us}
+                        mode="rel"
+                        threshold={20}
+                      />
                     </td>
                     <td className={s.num}>{fmtUs(svc.p99Us)}</td>
                     <td className={s.sparkCell}>

@@ -33,7 +33,12 @@ export interface SimNode extends SimulationNodeDatum {
 }
 
 export interface SimLink extends SimulationLinkDatum<SimNode> {
+  /** Call count aggregated on this edge. */
   value: number;
+  /** Error count on this edge. */
+  errorCount: number;
+  /** p95 latency (μs) of the child span on this edge. */
+  p95DurUs: number;
 }
 
 interface Options {
