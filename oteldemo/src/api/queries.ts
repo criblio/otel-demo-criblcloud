@@ -35,8 +35,14 @@ export interface FindTracesParams {
 }
 
 /**
- * Find root spans matching filters. Returns trace_id + summary fields.
- * The caller follows up with traceSpans() for the matching trace IDs.
+ * Find traces where the chosen service / operation participates (any depth,
+ * not just the root). Returns one row per matching trace_id with the
+ * earliest timestamp seen for that trace, sorted by recency.
+ *
+ * The caller follows up with traceSpans() for these IDs and computes the
+ * actual root span client-side. This matches Jaeger's "find traces" semantics
+ * — Jaeger lets you search by participating service even when that service
+ * is not the root of the trace.
  */
 export function findTraces(params: FindTracesParams): string {
   const filters: string[] = [];
@@ -72,12 +78,10 @@ export function findTraces(params: FindTracesParams): string {
 
   return `${SPANS_BASE}
     | extend svc=tostring(resource.attributes['service.name']),
-            pid=tostring(parent_span_id),
             dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0
-    | where pid=="" or isempty(pid)
     ${where}
-    | project trace_id, name, svc, _time, dur_us, status_code=tostring(status.code)
-    | sort by _time desc
+    | summarize first_seen=min(_time) by trace_id
+    | sort by first_seen desc
     | limit ${lim}`;
 }
 

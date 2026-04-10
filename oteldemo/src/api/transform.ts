@@ -15,12 +15,18 @@ import type {
 
 /** Convert an attributes object { key: value, ... } into JaegerTag[]. */
 function toTags(attrs: Record<string, unknown> | null | undefined): JaegerTag[] {
-  if (!attrs || typeof attrs !== 'object') return [];
+  if (!attrs || typeof attrs !== 'object' || Array.isArray(attrs)) return [];
   return Object.entries(attrs).map(([key, value]) => ({
     key,
     type: typeof value === 'number' ? (Number.isInteger(value) ? 'int64' : 'float64') : 'string',
     value: value as string | number | boolean,
   }));
+}
+
+/** Coerce a value to an array — Cribl Search sometimes returns null/{} for empty lists. */
+function toArray<T>(v: unknown): T[] {
+  if (Array.isArray(v)) return v as T[];
+  return [];
 }
 
 /** Build a stable processID from service name + instance id. */
@@ -102,7 +108,11 @@ export function toJaegerTraces(rows: Record<string, unknown>[]): JaegerTrace[] {
         tags.push({ key: 'error', type: 'bool', value: true });
       }
 
-      const logs: JaegerLogEntry[] = (s.events ?? []).map((e) => ({
+      const logs: JaegerLogEntry[] = toArray<{
+        time_unix_nano: number;
+        name: string;
+        attributes?: Record<string, unknown>;
+      }>(s.events).map((e) => ({
         timestamp: Number(e.time_unix_nano) / 1000,
         fields: [
           { key: 'event', type: 'string', value: e.name },
