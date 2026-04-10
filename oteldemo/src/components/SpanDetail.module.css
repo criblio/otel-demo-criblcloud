@@ -1,0 +1,105 @@
+.panel {
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+  box-shadow: var(--cds-shadow-sm);
+  padding: var(--cds-space-lg);
+}
+
+.panelEmpty {
+  color: var(--cds-color-fg-subtle);
+  font-style: italic;
+  text-align: center;
+  padding: var(--cds-space-xl);
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: var(--cds-space-sm);
+  font-size: var(--cds-font-size-lg);
+  font-weight: var(--cds-font-weight-semibold);
+  margin-bottom: var(--cds-space-sm);
+}
+
+.subtitle {
+  font-size: var(--cds-font-size-sm);
+  color: var(--cds-color-fg-muted);
+  margin-bottom: var(--cds-space-lg);
+}
+
+.section {
+  margin-top: var(--cds-space-lg);
+}
+
+.sectionTitle {
+  font-size: var(--cds-font-size-xs);
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: var(--cds-space-sm);
+}
+
+.tagTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--cds-font-size-sm);
+}
+
+.tagTable td {
+  padding: var(--cds-space-xs) var(--cds-space-sm);
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+  vertical-align: top;
+}
+
+.tagTable td:first-child {
+  font-family: var(--cds-font-mono);
+  color: var(--cds-color-fg-muted);
+  white-space: nowrap;
+  width: 200px;
+}
+
+.tagTable td:nth-child(2) {
+  font-family: var(--cds-font-mono);
+  word-break: break-all;
+}
+
+.serviceDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.spanIdMono {
+  font-family: var(--cds-font-mono);
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-muted);
+}
+
+.errorBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--cds-color-danger);
+  color: #fff;
+  border-radius: var(--cds-radius-sm);
+  font-size: var(--cds-font-size-xs);
+  font-weight: var(--cds-font-weight-semibold);
+  margin-left: var(--cds-space-sm);
+}
+
+.logsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.logsList li {
+  padding: var(--cds-space-xs) var(--cds-space-sm);
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+  font-size: var(--cds-font-size-sm);
+}
+.logsList li:last-child {
+  border-bottom: none;
+}

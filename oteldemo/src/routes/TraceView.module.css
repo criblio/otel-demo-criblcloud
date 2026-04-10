@@ -1,0 +1,106 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-space-lg);
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cds-space-lg);
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+  box-shadow: var(--cds-shadow-sm);
+  padding: var(--cds-space-lg);
+}
+
+.headerLeft {
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--cds-font-size-xl);
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+  margin-bottom: var(--cds-space-xs);
+  display: flex;
+  align-items: center;
+  gap: var(--cds-space-sm);
+}
+
+.svcChip {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: var(--cds-font-size-sm);
+  background: var(--cds-color-accent-subtle);
+  color: var(--cds-color-accent-hover);
+  border-radius: var(--cds-radius-sm);
+  font-weight: var(--cds-font-weight-medium);
+}
+
+.subtitle {
+  font-size: var(--cds-font-size-sm);
+  color: var(--cds-color-fg-muted);
+}
+
+.traceIdMono {
+  font-family: var(--cds-font-mono);
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-subtle);
+  margin-top: var(--cds-space-xs);
+}
+
+.stats {
+  display: flex;
+  gap: var(--cds-space-xl);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.statLabel {
+  font-size: var(--cds-font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--cds-color-fg-muted);
+  font-weight: var(--cds-font-weight-semibold);
+}
+
+.statValue {
+  font-size: var(--cds-font-size-lg);
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: var(--cds-space-lg);
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.loading,
+.errorBox {
+  padding: var(--cds-space-xl);
+  text-align: center;
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+  color: var(--cds-color-fg-muted);
+}
+
+.errorBox {
+  color: var(--cds-color-danger);
+  border-color: var(--cds-color-danger);
+}

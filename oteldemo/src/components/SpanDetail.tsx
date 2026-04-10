@@ -1,0 +1,105 @@
+import type { JaegerTrace, JaegerSpan } from '../api/types';
+import { formatDurationUs, serviceColor } from '../utils/spans';
+import s from './SpanDetail.module.css';
+
+interface Props {
+  trace: JaegerTrace;
+  span: JaegerSpan | null;
+}
+
+function formatTagValue(v: string | number | boolean): string {
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+export default function SpanDetail({ trace, span }: Props) {
+  if (!span) {
+    return (
+      <div className={s.panel}>
+        <div className={s.panelEmpty}>Click a span to view details.</div>
+      </div>
+    );
+  }
+  const proc = trace.processes[span.processID];
+  const svc = proc?.serviceName ?? 'unknown';
+  const color = serviceColor(svc);
+  const isError = span.tags.some((t) => t.key === 'error' && t.value === true);
+
+  return (
+    <div className={s.panel}>
+      <div className={s.title}>
+        <span className={s.serviceDot} style={{ background: color }} />
+        {svc} · {span.operationName}
+        {isError && <span className={s.errorBadge}>ERROR</span>}
+      </div>
+      <div className={s.subtitle}>
+        Duration {formatDurationUs(span.duration)} ·{' '}
+        <span className={s.spanIdMono}>span {span.spanID}</span>
+      </div>
+
+      <div className={s.section}>
+        <div className={s.sectionTitle}>Tags ({span.tags.length})</div>
+        <table className={s.tagTable}>
+          <tbody>
+            {span.tags.map((t, i) => (
+              <tr key={`${t.key}-${i}`}>
+                <td>{t.key}</td>
+                <td>{formatTagValue(t.value)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {span.logs.length > 0 && (
+        <div className={s.section}>
+          <div className={s.sectionTitle}>Events ({span.logs.length})</div>
+          <ul className={s.logsList}>
+            {span.logs.map((log, i) => {
+              const eventName = log.fields.find((f) => f.key === 'event')?.value;
+              const elapsed = log.timestamp - span.startTime;
+              return (
+                <li key={i}>
+                  <strong>{String(eventName ?? 'event')}</strong>{' '}
+                  <span className={s.spanIdMono}>+{formatDurationUs(elapsed)}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {span.references.length > 0 && (
+        <div className={s.section}>
+          <div className={s.sectionTitle}>References</div>
+          <table className={s.tagTable}>
+            <tbody>
+              {span.references.map((r, i) => (
+                <tr key={i}>
+                  <td>{r.refType}</td>
+                  <td>{r.spanID}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {proc && (
+        <div className={s.section}>
+          <div className={s.sectionTitle}>Process Tags ({proc.tags.length})</div>
+          <table className={s.tagTable}>
+            <tbody>
+              {proc.tags.map((t, i) => (
+                <tr key={`${t.key}-${i}`}>
+                  <td>{t.key}</td>
+                  <td>{formatTagValue(t.value)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
