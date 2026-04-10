@@ -15,19 +15,31 @@ interface LoadedPair {
 export default function ComparePage() {
   const { idA, idB } = useParams();
   const navigate = useNavigate();
+
+  // Draft inputs are keyed off the URL params so navigating to a fresh
+  // /compare/:a/:b URL re-initializes them; the user can then edit freely
+  // without re-pushing to the URL until they click Compare again.
+  const draftKey = `${idA ?? ''}|${idB ?? ''}`;
   const [a, setA] = useState(idA ?? '');
   const [b, setB] = useState(idB ?? '');
+  const [lastDraftKey, setLastDraftKey] = useState(draftKey);
+  if (lastDraftKey !== draftKey) {
+    // Derive-during-render pattern (the React-recommended alternative to
+    // setState-in-effect) — see https://react.dev/reference/react/useState
+    setLastDraftKey(draftKey);
+    setA(idA ?? '');
+    setB(idB ?? '');
+  }
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pair, setPair] = useState<LoadedPair | null>(null);
 
-  // Hydrate from URL when params present. The cancelled flag protects against
-  // React StrictMode double-mounting (which would otherwise fire two parallel
-  // pairs of trace fetches and apply state from whichever finished last).
+  // Fetch both traces whenever the URL params change. The cancelled flag
+  // neutralizes React StrictMode double-mounting (which would otherwise
+  // fire two parallel pairs of trace fetches and race to set state).
   useEffect(() => {
     if (!idA || !idB) return;
-    setA(idA);
-    setB(idB);
     let cancelled = false;
     setLoading(true);
     setError(null);

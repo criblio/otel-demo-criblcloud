@@ -19,5 +19,14 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // We use the canonical async-fetch-in-useEffect pattern (set loading,
+      // await, set result on resolve, clear on finally) with a `cancelled`
+      // flag to neutralize StrictMode double-mounts. The new
+      // set-state-in-effect rule flags every legitimate fetch effect, and
+      // its recommended alternative is "use a framework data layer" — out
+      // of scope for this app.
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])

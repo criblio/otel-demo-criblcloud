@@ -5,7 +5,14 @@
  * (rather than reaching for a React wrapper) because the popular wrappers
  * around d3-force / force-graph hit hooks-dispatcher errors under Vite + React 19,
  * and the rendering surface is small enough to write directly.
+ *
+ * The simulation owns its node/link arrays via refs so d3 can mutate them in
+ * place each tick — we then bump a counter via setState to schedule a render
+ * pass that reads the latest positions. The react-hooks/refs lint rule
+ * doesn't like "ref read during render," but the pattern is intentional and
+ * scoped to this one file.
  */
+/* eslint-disable react-hooks/refs */
 import { useEffect, useRef, useState, useMemo } from 'react';
 import {
   forceSimulation,
@@ -69,6 +76,10 @@ export default function DependencyGraph({ edges, width, height, onNodeClick }: P
   const simNodesRef = useRef<SimNode[]>([]);
   const simLinksRef = useRef<SimLink[]>([]);
 
+  function nodeRadius(callCount: number): number {
+    return Math.max(8, Math.min(28, 8 + Math.log10(callCount + 1) * 5));
+  }
+
   useEffect(() => {
     // Clone so d3-force can mutate freely
     const simNodes: SimNode[] = nodes.map((n) => ({ ...n }));
@@ -99,10 +110,6 @@ export default function DependencyGraph({ edges, width, height, onNodeClick }: P
       sim.stop();
     };
   }, [nodes, links, width, height]);
-
-  function nodeRadius(callCount: number): number {
-    return Math.max(8, Math.min(28, 8 + Math.log10(callCount + 1) * 5));
-  }
 
   return (
     <svg

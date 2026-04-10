@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import SearchForm, { DEFAULT_SEARCH_STATE, type SearchFormState } from '../components/SearchForm';
+import SearchForm from '../components/SearchForm';
+import { DEFAULT_SEARCH_STATE, type SearchFormState } from '../components/searchFormState';
 import TraceTable from '../components/TraceTable';
 import StatusBanner from '../components/StatusBanner';
 import { findTraces } from '../api/search';
