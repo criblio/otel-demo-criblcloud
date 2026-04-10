@@ -198,6 +198,50 @@ export function slowestTraces(service?: string): string {
 }
 
 /**
+ * Raw slow-trace rows enriched with the root span's (service, operation)
+ * for client-side class grouping. Returns up to `limit` of the slowest
+ * traces in the window, each tagged with its root svc/op so the UI can
+ * collapse repeating classes (e.g. 40 identical 600s streaming traces
+ * become 1 row with count=40).
+ *
+ * root_svc/root_op are picked via minif(col, is_root) — Cribl KQL doesn't
+ * have arg_min/arg_max, but minif(col, predicate) picks the min value
+ * among rows satisfying the predicate, which for a single-root trace is
+ * just "the root span's value."
+ */
+export function rawSlowestTraces(limit: number = 500): string {
+  return `${SPANS_BASE}
+    | extend svc=tostring(resource.attributes['service.name']),
+            parent=tostring(parent_span_id),
+            is_root=(parent=="" or isempty(parent))
+    | summarize trace_start_ns=min(start_time_unix_nano),
+                trace_end_ns=max(end_time_unix_nano),
+                root_svc=minif(svc, is_root),
+                root_op=minif(name, is_root)
+      by trace_id
+    | extend trace_dur_us=(toreal(trace_end_ns)-toreal(trace_start_ns))/1000.0
+    | where isnotnull(root_svc)
+    | sort by trace_dur_us desc
+    | limit ${limit}`;
+}
+
+/**
+ * Raw error span rows enriched with service + operation + status.message
+ * for client-side error class grouping. Returns up to `limit` of the most
+ * recent error spans.
+ */
+export function rawRecentErrorSpans(limit: number = 300): string {
+  return `${SPANS_BASE}
+    | extend svc=tostring(resource.attributes['service.name']),
+             is_error=(tostring(status.code)=="2"),
+             msg=tostring(status.message)
+    | where is_error
+    | sort by _time desc
+    | project _time, svc, name, trace_id, msg
+    | limit ${limit}`;
+}
+
+/**
  * Traces that had at least one error span — "recent errors" panel on
  * Home and Service detail. Optionally scoped to a service.
  */

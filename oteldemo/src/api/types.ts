@@ -102,6 +102,29 @@ export interface TraceBrief {
   errorCount?: number;
 }
 
+/** A class of slow traces: all traces sharing a (service, operation) root. */
+export interface SlowTraceClass {
+  rootService: string;
+  rootOperation: string;
+  count: number;
+  maxDurationUs: number;
+  p95DurationUs: number;
+  p50DurationUs: number;
+  /** Trace IDs in this class, sorted by duration desc. First is the slowest. */
+  sampleTraceIDs: string[];
+}
+
+/** A class of errors: (service, operation, first-line-of-message). */
+export interface ErrorClass {
+  service: string;
+  operation: string;
+  message: string;
+  count: number;
+  lastSeenMs: number;
+  /** Trace IDs that contained this error, most-recent first. */
+  sampleTraceIDs: string[];
+}
+
 /** A correlated log entry — trace_id + span_id matching the trace. */
 export interface TraceLogEntry {
   time: number; // ms

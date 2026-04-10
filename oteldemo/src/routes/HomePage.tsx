@@ -4,19 +4,20 @@ import TimeRangePicker from '../components/TimeRangePicker';
 import { binSecondsFor } from '../components/timeRanges';
 import Sparkline from '../components/Sparkline';
 import StatusBanner from '../components/StatusBanner';
-import TraceBriefList from '../components/TraceBriefList';
+import TraceClassList, { type ClassItem } from '../components/TraceClassList';
 import {
   listServiceSummaries,
   getServiceTimeSeries,
-  listSlowestTraces,
-  listRecentErrorTraces,
+  listSlowTraceClasses,
+  listErrorClasses,
 } from '../api/search';
 import { serviceColor } from '../utils/spans';
 import { serviceHealth, healthRowBg } from '../utils/health';
 import type {
   ServiceSummary,
   ServiceBucket,
-  TraceBrief,
+  SlowTraceClass,
+  ErrorClass,
 } from '../api/types';
 import s from './HomePage.module.css';
 
@@ -79,8 +80,8 @@ export default function HomePage() {
   const [range, setRange] = useState(DEFAULT_RANGE);
   const [summaries, setSummaries] = useState<ServiceSummary[]>([]);
   const [buckets, setBuckets] = useState<ServiceBucket[]>([]);
-  const [slowTraces, setSlowTraces] = useState<TraceBrief[]>([]);
-  const [errorTraces, setErrorTraces] = useState<TraceBrief[]>([]);
+  const [slowClasses, setSlowClasses] = useState<SlowTraceClass[]>([]);
+  const [errorClasses, setErrorClasses] = useState<ErrorClass[]>([]);
   const [loadingSummaries, setLoadingSummaries] = useState(true);
   const [loadingBuckets, setLoadingBuckets] = useState(true);
   const [loadingSlow, setLoadingSlow] = useState(true);
@@ -114,14 +115,14 @@ export default function HomePage() {
       .catch(() => setBuckets([]))
       .finally(() => setLoadingBuckets(false));
 
-    const pSlow = listSlowestTraces(undefined, range, 'now')
-      .then((r) => setSlowTraces(r))
-      .catch(() => setSlowTraces([]))
+    const pSlow = listSlowTraceClasses(range, 'now')
+      .then((r) => setSlowClasses(r))
+      .catch(() => setSlowClasses([]))
       .finally(() => setLoadingSlow(false));
 
-    const pErrors = listRecentErrorTraces(undefined, range, 'now')
-      .then((r) => setErrorTraces(r))
-      .catch(() => setErrorTraces([]))
+    const pErrors = listErrorClasses(range, 'now')
+      .then((r) => setErrorClasses(r))
+      .catch(() => setErrorClasses([]))
       .finally(() => setLoadingErrors(false));
 
     await Promise.allSettled([pSummaries, pBuckets, pSlow, pErrors]);
@@ -359,20 +360,37 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* Bottom panels: slow traces + error traces */}
+      {/* Bottom panels: slow trace classes + error classes */}
       <div className={s.panels}>
-        <TraceBriefList
-          title="Slowest traces"
-          subtitle="Top 20 by total duration"
-          traces={slowTraces}
+        <TraceClassList
+          title="Slowest trace classes"
+          subtitle="Grouped by root (service, operation) — click to view the worst example"
+          items={slowClasses.map<ClassItem>((c) => ({
+            key: `${c.rootService}\u0000${c.rootOperation}`,
+            service: c.rootService,
+            operation: c.rootOperation,
+            count: c.count,
+            sampleTraceID: c.sampleTraceIDs[0] ?? '',
+            maxDurationUs: c.maxDurationUs,
+            p95DurationUs: c.p95DurationUs,
+            p50DurationUs: c.p50DurationUs,
+          }))}
           loading={loadingSlow}
           mode="duration"
           emptyMessage="No traces in this range."
         />
-        <TraceBriefList
-          title="Recent errors"
-          subtitle="Most recent traces with ≥1 error span"
-          traces={errorTraces}
+        <TraceClassList
+          title="Error classes"
+          subtitle="Grouped by (service, operation, message) — click to view a sample"
+          items={errorClasses.map<ClassItem>((c) => ({
+            key: `${c.service}\u0000${c.operation}\u0000${c.message}`,
+            service: c.service,
+            operation: c.operation,
+            count: c.count,
+            message: c.message,
+            sampleTraceID: c.sampleTraceIDs[0] ?? '',
+            lastSeenMs: c.lastSeenMs,
+          }))}
           loading={loadingErrors}
           mode="errors"
           emptyMessage="No errors in this range — all clear."

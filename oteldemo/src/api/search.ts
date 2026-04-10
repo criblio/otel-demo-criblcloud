@@ -14,6 +14,8 @@ import type {
   OperationSummary,
   TraceBrief,
   TraceLogEntry,
+  SlowTraceClass,
+  ErrorClass,
 } from './types';
 
 export async function listServices(earliest = '-1h'): Promise<string[]> {
@@ -206,6 +208,124 @@ export async function listRecentErrorTraces(
       errorCount: toNum(r.error_count),
     }))
     .filter((t) => t.traceID);
+}
+
+/**
+ * Fetch the raw slowest-trace rows and group them client-side by
+ * (root_service, root_operation). Each class collapses N duplicate-looking
+ * traces into one row with count, max, p95, p50, and a sorted list of
+ * sample trace IDs.
+ */
+export async function listSlowTraceClasses(
+  earliest = '-1h',
+  latest = 'now',
+  rawLimit = 500,
+  topClasses = 20,
+): Promise<SlowTraceClass[]> {
+  const rows = await runQuery(Q.rawSlowestTraces(rawLimit), earliest, latest, rawLimit);
+  interface Acc {
+    rootService: string;
+    rootOperation: string;
+    durations: number[];
+    traceIds: string[]; // sorted by duration as we go
+  }
+  const groups = new Map<string, Acc>();
+  for (const r of rows) {
+    const svc = String(r.root_svc ?? '');
+    const op = String(r.root_op ?? '');
+    const dur = toNum(r.trace_dur_us);
+    const id = String(r.trace_id ?? '');
+    if (!svc || !id) continue;
+    const key = `${svc}\u0000${op}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { rootService: svc, rootOperation: op, durations: [], traceIds: [] };
+      groups.set(key, g);
+    }
+    g.durations.push(dur);
+    g.traceIds.push(id);
+  }
+  const classes: SlowTraceClass[] = [];
+  for (const g of groups.values()) {
+    // Pair durations with trace_ids and sort so the first trace_id is the
+    // slowest exemplar.
+    const paired = g.durations.map((d, i) => ({ d, id: g.traceIds[i] }));
+    paired.sort((a, b) => b.d - a.d);
+    const durs = paired.map((p) => p.d);
+    classes.push({
+      rootService: g.rootService,
+      rootOperation: g.rootOperation,
+      count: durs.length,
+      maxDurationUs: durs[0] ?? 0,
+      p95DurationUs: percentile(durs, 95),
+      p50DurationUs: percentile(durs, 50),
+      sampleTraceIDs: paired.map((p) => p.id).slice(0, 5),
+    });
+  }
+  classes.sort((a, b) => b.maxDurationUs - a.maxDurationUs);
+  return classes.slice(0, topClasses);
+}
+
+/**
+ * Fetch raw recent error spans and group them client-side by
+ * (service, operation, first-line-of-message). Counts, last seen, and
+ * up to 5 sample trace IDs per class.
+ */
+export async function listErrorClasses(
+  earliest = '-1h',
+  latest = 'now',
+  rawLimit = 300,
+  topClasses = 20,
+): Promise<ErrorClass[]> {
+  const rows = await runQuery(Q.rawRecentErrorSpans(rawLimit), earliest, latest, rawLimit);
+  interface Acc {
+    service: string;
+    operation: string;
+    message: string;
+    count: number;
+    lastSeenMs: number;
+    traceIds: string[];
+  }
+  const groups = new Map<string, Acc>();
+  for (const r of rows) {
+    const svc = String(r.svc ?? 'unknown');
+    const op = String(r.name ?? 'unknown');
+    const rawMsg = String(r.msg ?? '').trim();
+    // Normalize: take the first line and strip trailing whitespace; if
+    // empty, fall back to "(no status message)" so the grouping still
+    // has a stable key.
+    const firstLine = rawMsg.split('\n')[0].trim();
+    const msg = firstLine || '(no status message)';
+    const t = toNum(r._time) * 1000;
+    const id = String(r.trace_id ?? '');
+    if (!id) continue;
+    const key = `${svc}\u0000${op}\u0000${msg}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { service: svc, operation: op, message: msg, count: 0, lastSeenMs: 0, traceIds: [] };
+      groups.set(key, g);
+    }
+    g.count += 1;
+    if (t > g.lastSeenMs) g.lastSeenMs = t;
+    if (g.traceIds.length < 5) g.traceIds.push(id);
+  }
+  const classes: ErrorClass[] = Array.from(groups.values()).map((g) => ({
+    service: g.service,
+    operation: g.operation,
+    message: g.message,
+    count: g.count,
+    lastSeenMs: g.lastSeenMs,
+    sampleTraceIDs: g.traceIds,
+  }));
+  classes.sort((a, b) => b.count - a.count || b.lastSeenMs - a.lastSeenMs);
+  return classes.slice(0, topClasses);
+}
+
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+  return sorted[idx];
 }
 
 /** Fetch logs correlated to a given trace. */
