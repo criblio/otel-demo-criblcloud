@@ -1,62 +1,52 @@
 /**
  * Force-directed dependency graph rendered as SVG.
  *
- * Uses d3-force for the physics simulation. We render the SVG ourselves
- * (rather than reaching for a React wrapper) because the popular wrappers
- * around d3-force / force-graph hit hooks-dispatcher errors under Vite + React 19,
- * and the rendering surface is small enough to write directly.
+ * Uses the shared useForceLayout hook so the IsometricGraph sibling can
+ * read the same simulation state and node positions. Each component
+ * owns its own rendering + pointer interaction; the hook owns the
+ * physics.
  *
- * The simulation owns its node/link arrays via refs so d3 can mutate them in
- * place each tick — we then bump a counter via setState to schedule a render
- * pass that reads the latest positions.
+ * Interaction:
+ *  - Hover a node → show tooltip
+ *  - Click a node (no drag) → pin tooltip; click again / click background
+ *    to unpin
+ *  - Drag a node → repositions it via fx/fy and the position stays after
+ *    release (the user explicitly moved it, so physics won't pull it back).
+ *    A drag threshold distinguishes click from drag so the tooltip-pin
+ *    behavior doesn't fire on drags.
  *
- * Nodes are:
- *  - filled by *health* (error rate bucket — green / yellow / orange / red / gray)
- *  - sized by *traffic* (log of request count)
- *  - outlined by service identity hue (subtle) so two services with the
- *    same health still look distinguishable
- * On hover: show a floating NodeTooltip card with full stats + sparklines.
- * On click: pin the tooltip in place (adds a close button); clicking the
- *   same node or the background closes it. Navigation to the full service
- *   detail page happens via the "View service detail →" link inside the
- *   tooltip, so the click on the node itself is reserved for pinning.
+ * Node visual encoding:
+ *  - Fill = serviceColor(id) — the deterministic hash hue used everywhere
+ *    else in the app for consistent service identification.
+ *  - Size = log of request count (traffic volume).
+ *  - Health = offset halo ring drawn only for non-healthy buckets; the
+ *    common healthy case stays visually calm.
+ *
+ * We deliberately read d3's mutable node/link arrays out of refs during
+ * render — that's how d3-force and React cooperate without copying arrays
+ * every tick. The eslint rule flags it but the pattern is intentional.
  */
-import { useEffect, useRef, useState, useMemo } from 'react';
-import {
-  forceSimulation,
-  forceManyBody,
-  forceLink,
-  forceCenter,
-  forceCollide,
-  type SimulationNodeDatum,
-  type SimulationLinkDatum,
-} from 'd3-force';
+/* eslint-disable react-hooks/refs */
+import { useMemo, useRef, useState } from 'react';
 import NodeTooltip from './NodeTooltip';
 import { serviceColor } from '../utils/spans';
 import { serviceHealth } from '../utils/health';
+import { useForceLayout, type SimNode, type SimLink } from '../hooks/useForceLayout';
 import type {
   DependencyEdge,
   ServiceSummary,
   ServiceBucket,
 } from '../api/types';
 
-interface SimNode extends SimulationNodeDatum {
-  id: string;
-  size: number;
-}
-interface SimLink extends SimulationLinkDatum<SimNode> {
-  value: number;
-}
-
 interface Props {
   edges: DependencyEdge[];
-  /** Per-service summary keyed by service name. Drives health color + tooltip. */
   services: Map<string, ServiceSummary>;
-  /** Time buckets keyed by service name. Drives sparklines in the tooltip. */
   bucketsByService: Map<string, ServiceBucket[]>;
   width: number;
   height: number;
 }
+
+const DRAG_THRESHOLD = 4;
 
 export default function DependencyGraph({
   edges,
@@ -69,11 +59,19 @@ export default function DependencyGraph({
   const [hovered, setHovered] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
 
-  // Build nodes & links from edges (skip self-loops; aggregate edge counts).
+  // Drag state — the active pointer session, cleared on release.
+  const dragRef = useRef<{
+    id: string;
+    startX: number;
+    startY: number;
+    hasMoved: boolean;
+  } | null>(null);
+
+  // Build nodes & links. Seed from the services map so isolated services
+  // still appear. Skip self-loops on edges.
   const { nodes, links } = useMemo(() => {
     const nodeMap = new Map<string, SimNode>();
     const linkAgg = new Map<string, SimLink>();
-    // Seed from services map so services without dependencies still appear.
     for (const svc of services.keys()) {
       if (!nodeMap.has(svc)) nodeMap.set(svc, { id: svc, size: 0 });
     }
@@ -88,68 +86,38 @@ export default function DependencyGraph({
       if (existing) {
         existing.value += e.callCount;
       } else {
-        linkAgg.set(key, {
-          source: e.parent,
-          target: e.child,
-          value: e.callCount,
-        });
+        linkAgg.set(key, { source: e.parent, target: e.child, value: e.callCount });
       }
     }
-    return { nodes: Array.from(nodeMap.values()), links: Array.from(linkAgg.values()) };
+    return {
+      nodes: Array.from(nodeMap.values()),
+      links: Array.from(linkAgg.values()),
+    };
   }, [edges, services]);
 
+  // Node size function shared with the simulation (so collision padding
+  // uses the same radii as rendering).
   function nodeRadius(node: SimNode): number {
-    // Size by traffic (request count). Fall back to edge callCount if no summary.
     const summary = services.get(node.id);
     const volume = summary ? summary.requests : node.size;
     return Math.max(10, Math.min(34, 10 + Math.log10(volume + 1) * 6));
   }
 
-  // Live positions tracked in state so React re-renders on each tick.
-  // We mutate the simNodes objects in place — d3 owns them.
-  const [, force] = useState(0); // bumped each tick to trigger re-renders
-  const simNodesRef = useRef<SimNode[]>([]);
-  const simLinksRef = useRef<SimLink[]>([]);
+  const { simNodesRef, simLinksRef, pinNode, releaseNode } = useForceLayout({
+    nodes,
+    links,
+    width,
+    height,
+    nodeRadius,
+  });
 
-  useEffect(() => {
-    // Clone so d3-force can mutate freely
-    const simNodes: SimNode[] = nodes.map((n) => ({ ...n }));
-    const simLinks: SimLink[] = links.map((l) => ({ ...l }));
-    simNodesRef.current = simNodes;
-    simLinksRef.current = simLinks;
-
-    const sim = forceSimulation<SimNode>(simNodes)
-      .force(
-        'link',
-        forceLink<SimNode, SimLink>(simLinks)
-          .id((d) => d.id)
-          .distance(130)
-          .strength(0.5),
-      )
-      .force('charge', forceManyBody().strength(-500))
-      .force('center', forceCenter(width / 2, height / 2))
-      .force(
-        'collision',
-        forceCollide<SimNode>().radius((d) => nodeRadius(d) + 6),
-      )
-      .alphaDecay(0.04)
-      .on('tick', () => {
-        force((c) => c + 1);
-      });
-
-    return () => {
-      sim.stop();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, links, width, height]);
-
-  // The node that should show a tooltip — pinned takes precedence over hovered.
   const focusId = pinned ?? hovered;
   const focusNode = focusId
     ? simNodesRef.current.find((n) => n.id === focusId)
     : null;
 
-  // Position the tooltip to the right of the node if there's room, else left.
+  // Position the tooltip next to the focused node, keeping it inside the
+  // canvas area.
   function tooltipPosition(node: SimNode): { left: number; top: number } {
     const r = nodeRadius(node);
     const nx = node.x ?? 0;
@@ -165,11 +133,69 @@ export default function DependencyGraph({
     return { left, top };
   }
 
+  function pointerSvgCoords(e: React.PointerEvent): { x: number; y: number } {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const rect = svg.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  function onNodePointerDown(e: React.PointerEvent<SVGGElement>, nodeId: string) {
+    e.stopPropagation();
+    const target = e.currentTarget;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch {
+      /* no-op */
+    }
+    const { x, y } = pointerSvgCoords(e);
+    dragRef.current = { id: nodeId, startX: x, startY: y, hasMoved: false };
+    // Pin immediately so the node doesn't jitter under the pointer if
+    // the simulation is still running.
+    pinNode(nodeId, x, y);
+  }
+
+  function onNodePointerMove(e: React.PointerEvent<SVGGElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const { x, y } = pointerSvgCoords(e);
+    if (
+      !drag.hasMoved &&
+      Math.hypot(x - drag.startX, y - drag.startY) > DRAG_THRESHOLD
+    ) {
+      drag.hasMoved = true;
+    }
+    if (drag.hasMoved) {
+      pinNode(drag.id, x, y);
+    }
+  }
+
+  function onNodePointerUp(e: React.PointerEvent<SVGGElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const target = e.currentTarget;
+    try {
+      target.releasePointerCapture(e.pointerId);
+    } catch {
+      /* no-op */
+    }
+    const wasDrag = drag.hasMoved;
+    dragRef.current = null;
+
+    if (!wasDrag) {
+      // Short click → release the temporary pin (physics takes over
+      // again) and toggle the tooltip pin for this node.
+      releaseNode(drag.id);
+      setPinned((cur) => (cur === drag.id ? null : drag.id));
+    }
+    // If it WAS a drag, leave fx/fy set so the node stays where the user
+    // dropped it. The simulation will route other nodes around it.
+  }
+
   return (
     <div
       style={{ position: 'relative', width, height }}
       onClick={() => {
-        // Click on background (outside any node) dismisses the pinned tooltip
         setPinned(null);
       }}
     >
@@ -204,7 +230,6 @@ export default function DependencyGraph({
           </marker>
         </defs>
 
-        {/* Edges */}
         <g>
           {simLinksRef.current.map((l, i) => {
             const sx = (l.source as SimNode).x ?? 0;
@@ -213,7 +238,6 @@ export default function DependencyGraph({
             const ty = (l.target as SimNode).y ?? 0;
             const sourceId = (l.source as SimNode).id;
             const targetId = (l.target as SimNode).id;
-            // Pull endpoint back so the arrowhead lands at the node edge
             const dx = tx - sx;
             const dy = ty - sy;
             const dist = Math.max(1, Math.hypot(dx, dy));
@@ -232,13 +256,14 @@ export default function DependencyGraph({
                 stroke={isHighlighted ? '#0190ff' : '#9ca3af'}
                 strokeOpacity={isHighlighted ? 0.9 : focusId ? 0.15 : 0.45}
                 strokeWidth={Math.max(1, Math.log10(l.value + 1))}
-                markerEnd={isHighlighted ? 'url(#arrowheadActive)' : 'url(#arrowhead)'}
+                markerEnd={
+                  isHighlighted ? 'url(#arrowheadActive)' : 'url(#arrowhead)'
+                }
               />
             );
           })}
         </g>
 
-        {/* Nodes */}
         <g>
           {simNodesRef.current.map((n) => {
             const r = nodeRadius(n);
@@ -250,10 +275,6 @@ export default function DependencyGraph({
             const isPinned = pinned === n.id;
             const idColor = serviceColor(n.id);
 
-            // Health encoding: an offset halo ring around the node,
-            // sized/colored by bucket. Healthy nodes get no ring so
-            // the graph stays calm; unhealthy nodes stand out visually
-            // without hiding the identity fill color underneath.
             const haloGap = 3;
             const haloRadius = r + haloGap;
             const haloWidth =
@@ -262,22 +283,20 @@ export default function DependencyGraph({
               : health.bucket === 'watch' ? 2
               : health.bucket === 'idle' ? 1
               : 0;
-            const haloDash =
-              health.bucket === 'idle' ? '3 3' : undefined;
+            const haloDash = health.bucket === 'idle' ? '3 3' : undefined;
 
             return (
               <g
                 key={n.id}
                 transform={`translate(${x},${y})`}
-                style={{ cursor: 'pointer' }}
+                style={{ cursor: 'grab', touchAction: 'none' }}
                 onMouseEnter={() => setHovered(n.id)}
                 onMouseLeave={() => setHovered(null)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPinned((cur) => (cur === n.id ? null : n.id));
-                }}
+                onPointerDown={(e) => onNodePointerDown(e, n.id)}
+                onPointerMove={onNodePointerMove}
+                onPointerUp={onNodePointerUp}
+                onClick={(e) => e.stopPropagation()}
               >
-                {/* Health halo — only drawn for non-healthy buckets */}
                 {haloWidth > 0 && (
                   <circle
                     r={haloRadius}
@@ -290,8 +309,6 @@ export default function DependencyGraph({
                   >
                     {health.bucket === 'critical' && (
                       <>
-                        {/* Subtle pulse for critical nodes so they
-                            catch the eye during scan. */}
                         <animate
                           attributeName="r"
                           values={`${haloRadius};${haloRadius + 3};${haloRadius}`}
@@ -308,8 +325,6 @@ export default function DependencyGraph({
                     )}
                   </circle>
                 )}
-                {/* Main disc — identity-colored for service consistency
-                    with the Home catalog, waterfall, and logs view. */}
                 <circle
                   r={r}
                   fill={idColor}
@@ -334,7 +349,7 @@ export default function DependencyGraph({
         </g>
       </svg>
 
-      {focusNode && (
+      {focusNode &&
         (() => {
           const { left, top } = tooltipPosition(focusNode);
           return (
@@ -348,8 +363,7 @@ export default function DependencyGraph({
               onClose={() => setPinned(null)}
             />
           );
-        })()
-      )}
+        })()}
     </div>
   );
 }

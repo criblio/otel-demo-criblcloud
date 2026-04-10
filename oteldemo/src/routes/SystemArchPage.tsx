@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import DependencyGraph from '../components/DependencyGraph';
+import IsometricGraph from '../components/IsometricGraph';
 import StatusBanner from '../components/StatusBanner';
 import {
   getDependencies,
@@ -23,11 +24,19 @@ const LOOKBACKS = [
   { label: 'Last 24 hours', value: '-24h' },
 ];
 
+type ViewMode = 'graph' | 'isometric';
+const VIEW_MODES: Array<{ value: ViewMode; label: string }> = [
+  { value: 'graph', label: 'Graph' },
+  { value: 'isometric', label: 'Isometric' },
+];
+
 export default function SystemArchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const containerRef = useRef<HTMLDivElement>(null);
 
   const lookback = searchParams.get('lookback') ?? '-1h';
+  const viewParam = searchParams.get('view');
+  const view: ViewMode = viewParam === 'isometric' ? 'isometric' : 'graph';
   const [edges, setEdges] = useState<DependencyEdge[]>([]);
   const [summaries, setSummaries] = useState<ServiceSummary[]>([]);
   const [buckets, setBuckets] = useState<ServiceBucket[]>([]);
@@ -95,6 +104,13 @@ export default function SystemArchPage() {
     setSearchParams(next, { replace: false });
   }
 
+  function setView(value: ViewMode) {
+    const next = new URLSearchParams(searchParams);
+    if (value === 'graph') next.delete('view');
+    else next.set('view', value);
+    setSearchParams(next, { replace: true });
+  }
+
   // Build fast lookups used by the graph
   const servicesMap = useMemo(() => {
     const m = new Map<string, ServiceSummary>();
@@ -126,6 +142,20 @@ export default function SystemArchPage() {
   return (
     <div className={s.page}>
       <div className={s.toolbar}>
+        <div className={s.viewSwitch} role="tablist" aria-label="View mode">
+          {VIEW_MODES.map((mode) => (
+            <button
+              key={mode.value}
+              type="button"
+              role="tab"
+              aria-selected={view === mode.value}
+              className={`${s.viewBtn} ${view === mode.value ? s.viewBtnActive : ''}`}
+              onClick={() => setView(mode.value)}
+            >
+              {mode.label}
+            </button>
+          ))}
+        </div>
         <span className={s.label}>Lookback</span>
         <select className={s.select} value={lookback} onChange={(e) => setLookback(e.target.value)}>
           {LOOKBACKS.map((l) => (
@@ -183,8 +213,17 @@ export default function SystemArchPage() {
         {!loadingDeps && edges.length === 0 && !error && (
           <div className={s.empty}>No service dependencies in this time range.</div>
         )}
-        {!loadingDeps && edges.length > 0 && (
+        {!loadingDeps && edges.length > 0 && view === 'graph' && (
           <DependencyGraph
+            edges={edges}
+            services={servicesMap}
+            bucketsByService={bucketsByService}
+            width={dims.w}
+            height={dims.h}
+          />
+        )}
+        {!loadingDeps && edges.length > 0 && view === 'isometric' && (
+          <IsometricGraph
             edges={edges}
             services={servicesMap}
             bucketsByService={bucketsByService}

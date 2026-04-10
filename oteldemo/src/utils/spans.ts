@@ -101,12 +101,22 @@ export function buildTimeline(trace: JaegerTrace): TraceTimeline {
  * colors are for *scanning for problems*. Both signals live side by side.
  */
 export function serviceColor(service: string): string {
+  return `hsl(${serviceHue(service)}, 60%, 50%)`;
+}
+
+/** Same hue as serviceColor() but at a custom lightness. Used by the
+ * isometric view to render cylinder sides + bottom shadows in darker
+ * shades of the service's identity color. */
+export function serviceColorAtLightness(service: string, lightnessPct: number): string {
+  return `hsl(${serviceHue(service)}, 60%, ${lightnessPct}%)`;
+}
+
+function serviceHue(service: string): number {
   let hash = 0;
   for (let i = 0; i < service.length; i++) {
     hash = (hash * 31 + service.charCodeAt(i)) | 0;
   }
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 60%, 50%)`;
+  return Math.abs(hash) % 360;
 }
 
 /** Format a μs duration as a short human string. */
