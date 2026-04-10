@@ -1,10 +1,17 @@
-import type { JaegerTrace, JaegerSpan } from '../api/types';
+import { useState } from 'react';
+import type { JaegerTrace, JaegerSpan, TraceLogEntry } from '../api/types';
 import { formatDurationUs, serviceColor } from '../utils/spans';
+import TraceLogsView from './TraceLogsView';
 import s from './SpanDetail.module.css';
 
 interface Props {
   trace: JaegerTrace;
   span: JaegerSpan | null;
+  /** Logs whose span_id matches the selected span's ID. */
+  spanLogs?: TraceLogEntry[];
+  loadingLogs?: boolean;
+  /** Trace start time in ms, used as the offset reference for log rows. */
+  traceStartMs?: number;
 }
 
 function formatTagValue(v: string | number | boolean): string {
@@ -12,7 +19,15 @@ function formatTagValue(v: string | number | boolean): string {
   return String(v);
 }
 
-export default function SpanDetail({ trace, span }: Props) {
+export default function SpanDetail({
+  trace,
+  span,
+  spanLogs = [],
+  loadingLogs,
+  traceStartMs,
+}: Props) {
+  const [logsExpanded, setLogsExpanded] = useState(true);
+
   if (!span) {
     return (
       <div className={s.panel}>
@@ -68,6 +83,38 @@ export default function SpanDetail({ trace, span }: Props) {
           </ul>
         </div>
       )}
+
+      {/* Logs during this span — correlated by span_id */}
+      <div className={s.section}>
+        <div
+          className={s.sectionTitle}
+          style={{ cursor: 'pointer', userSelect: 'none' }}
+          onClick={() => setLogsExpanded((v) => !v)}
+        >
+          {logsExpanded ? '▼' : '▶'} Logs during this span (
+          {loadingLogs ? '…' : spanLogs.length})
+        </div>
+        {logsExpanded && (
+          <div style={{ marginTop: 'var(--cds-space-sm)' }}>
+            {loadingLogs ? (
+              <div style={{ color: 'var(--cds-color-fg-subtle)', fontSize: 'var(--cds-font-size-sm)' }}>
+                Loading…
+              </div>
+            ) : spanLogs.length === 0 ? (
+              <div style={{ color: 'var(--cds-color-fg-subtle)', fontSize: 'var(--cds-font-size-sm)', fontStyle: 'italic' }}>
+                No logs correlated to this span.
+              </div>
+            ) : (
+              <TraceLogsView
+                logs={spanLogs}
+                title="Logs"
+                compact
+                referenceTimeMs={traceStartMs}
+              />
+            )}
+          </div>
+        )}
+      </div>
 
       {span.references.length > 0 && (
         <div className={s.section}>
