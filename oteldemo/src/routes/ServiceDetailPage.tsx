@@ -14,6 +14,7 @@ import {
 } from '../api/search';
 import { serviceColor } from '../utils/spans';
 import { previousWindow } from '../utils/timeRange';
+import { useRangeParam } from '../hooks/useRangeParam';
 import DeltaChip from '../components/DeltaChip';
 import type {
   ServiceSummary,
@@ -25,6 +26,9 @@ import type {
 import s from './ServiceDetailPage.module.css';
 
 const DEFAULT_RANGE = '-1h';
+
+/** See HomePage — same rationale. */
+const MIN_PREV_SAMPLES = 10;
 
 function fmtUs(us: number): string {
   if (!Number.isFinite(us) || us === 0) return '—';
@@ -63,7 +67,7 @@ function relativeTimeMs(rel: string): number {
 export default function ServiceDetailPage() {
   const { serviceName = '' } = useParams();
   const navigate = useNavigate();
-  const [range, setRange] = useState(DEFAULT_RANGE);
+  const [range, setRange] = useRangeParam(DEFAULT_RANGE);
   const [summary, setSummary] = useState<ServiceSummary | null>(null);
   const [prevSummary, setPrevSummary] = useState<ServiceSummary | null>(null);
   const [buckets, setBuckets] = useState<ServiceBucket[]>([]);
@@ -92,8 +96,10 @@ export default function ServiceDetailPage() {
     setLoadingDeps(true);
     const binSeconds = binSecondsFor(range);
 
-    // Summary (and "does the service even exist in this range?")
-    listServiceSummaries(range, 'now')
+    // Summary (and "does the service even exist in this range?") —
+    // filtered to just this service at the query level so it stays
+    // fast even during high-traffic scenarios.
+    listServiceSummaries(range, 'now', serviceName)
       .then((all) => {
         const mine = all.find((x) => x.service === serviceName);
         setSummary(mine ?? null);
@@ -104,9 +110,10 @@ export default function ServiceDetailPage() {
       })
       .finally(() => setLoadingSummary(false));
 
-    // Previous-window summary for the delta chips. Non-fatal on error.
+    // Previous-window summary for the delta chips. Also filtered to
+    // just this service. Non-fatal on error.
     const prev = previousWindow(range);
-    listServiceSummaries(prev.earliest, prev.latest)
+    listServiceSummaries(prev.earliest, prev.latest, serviceName)
       .then((all) => setPrevSummary(all.find((x) => x.service === serviceName) ?? null))
       .catch(() => setPrevSummary(null));
 
@@ -231,6 +238,12 @@ export default function ServiceDetailPage() {
     return opSort.dir === 'desc' ? ' ▼' : ' ▲';
   }
 
+  // Significance-gated previous summary — used as the delta-chip baseline.
+  // We drop the prev comparison when the window had too few samples; its
+  // percentiles would be too noisy to flag anything meaningfully.
+  const prevSig =
+    prevSummary && prevSummary.requests >= MIN_PREV_SAMPLES ? prevSummary : null;
+
   // Derive upstream / downstream from dependencies
   const { upstream, downstream } = useMemo(() => {
     const up = edges
@@ -292,7 +305,7 @@ export default function ServiceDetailPage() {
               {summary ? fmtRate(summary.requests / rangeMinutes) : '—'}
               <DeltaChip
                 curr={summary ? summary.requests / rangeMinutes : undefined}
-                prev={prevSummary ? prevSummary.requests / rangeMinutes : undefined}
+                prev={prevSig ? prevSig.requests / rangeMinutes : undefined}
                 mode="relNeutral"
                 threshold={25}
               />
@@ -306,7 +319,7 @@ export default function ServiceDetailPage() {
               {summary ? `${(summary.errorRate * 100).toFixed(2)}%` : '—'}
               <DeltaChip
                 curr={summary?.errorRate}
-                prev={prevSummary?.errorRate}
+                prev={prevSig?.errorRate}
                 mode="points"
                 threshold={0.5}
               />
@@ -318,9 +331,21 @@ export default function ServiceDetailPage() {
               {summary ? fmtUs(summary.p95Us) : '—'}
               <DeltaChip
                 curr={summary?.p95Us}
-                prev={prevSummary?.p95Us}
+                prev={prevSig?.p95Us}
                 mode="rel"
-                threshold={20}
+                threshold={30}
+              />
+            </span>
+          </div>
+          <div className={s.stat}>
+            <span className={s.statLabel}>p99</span>
+            <span className={s.statValue}>
+              {summary ? fmtUs(summary.p99Us) : '—'}
+              <DeltaChip
+                curr={summary?.p99Us}
+                prev={prevSig?.p99Us}
+                mode="rel"
+                threshold={30}
               />
             </span>
           </div>

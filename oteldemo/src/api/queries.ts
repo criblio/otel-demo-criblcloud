@@ -134,12 +134,24 @@ export function traceSpans(traceIds: string[]): string {
 /**
  * Per-service summary aggregated over the whole time window: request count,
  * error count, duration percentiles. Powers the Home page service catalog.
+ *
+ * Optional `service` filter: when set, scope the query to a single
+ * service BEFORE the summarize step. ServiceDetailPage uses this
+ * (twice — current + previous window) and only cares about one row;
+ * without the filter, each call reads and aggregates every span in
+ * the dataset, which becomes very slow under load (tens of seconds
+ * during kafka/flood scenarios). With the filter, the scan is
+ * proportional to just that service's traffic.
  */
-export function serviceSummary(): string {
+export function serviceSummary(service?: string): string {
+  const svcFilter = service
+    ? `| where svc=="${service.replace(/"/g, '\\"')}"`
+    : '';
   return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
             dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
             is_error=(tostring(status.code)=="2")
+    ${svcFilter}
     | summarize requests=count(),
                 errors=countif(is_error),
                 p50_us=percentile(dur_us, 50),
@@ -225,6 +237,14 @@ export function slowestTraces(service?: string): string {
  * have arg_min/arg_max, but minif(col, predicate) picks the min value
  * among rows satisfying the predicate, which for a single-root trace is
  * just "the root span's value."
+ *
+ * Streaming long-poll traces (flagd.evaluation.v1.Service/EventStream
+ * and similar) are filtered out after the root op is known. These spans
+ * hold a connection open for 10 minutes by design so they always dominate
+ * a duration-sorted list even though they're not failures. If we don't
+ * filter them, the Home "Slowest trace classes" panel becomes a wall of
+ * the same flagd stream repeated for every service and the real slow
+ * traces get pushed off the list.
  */
 export function rawSlowestTraces(limit: number = 500): string {
   return `${spansBase()}
@@ -238,6 +258,8 @@ export function rawSlowestTraces(limit: number = 500): string {
       by trace_id
     | extend trace_dur_us=(toreal(trace_end_ns)-toreal(trace_start_ns))/1000.0
     | where isnotnull(root_svc)
+    | where not (tostring(root_op) endswith "/EventStream")
+    | where not (tostring(root_op) startswith "flagd.")
     | sort by trace_dur_us desc
     | limit ${limit}`;
 }
@@ -362,6 +384,38 @@ export function traceLogs(traceId: string): string {
               code_line=attributes['code.line.number']
     | sort by _time asc
     | limit 5000`;
+}
+
+/**
+ * Messaging / async dependency edges.
+ *
+ * OTel kafka / rabbitmq instrumentation does NOT link producer and
+ * consumer spans via parent_span_id — they live in different traces.
+ * Instead, each side has `messaging.destination.name` (the topic /
+ * queue) and `messaging.operation` (publish/send on producer,
+ * receive/process on consumer). We aggregate per
+ * (service, topic, operation) and cross-product producers×consumers
+ * client-side in transform.ts to synthesize edges.
+ *
+ * The span duration on the CONSUMER side is what captures lag
+ * (kafkaQueueProblems scenario) — that's where p95 goes from ms to
+ * tens of seconds — so we carry the consumer p95 through as the edge
+ * latency metric.
+ */
+export function messagingDependencies(): string {
+  return `${spansBase()}
+    | extend svc=tostring(resource.attributes['service.name']),
+            dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
+            is_error=(tostring(status.code)=="2"),
+            msg_op=tostring(attributes['messaging.operation']),
+            msg_dest=tostring(attributes['messaging.destination.name']),
+            msg_system=tostring(attributes['messaging.system'])
+    | where isnotempty(msg_dest) and isnotempty(msg_op)
+    | summarize spans=count(),
+                errors=countif(is_error),
+                p95_us=percentile(dur_us, 95)
+      by svc, msg_dest, msg_op, msg_system
+    | sort by spans desc`;
 }
 
 /**

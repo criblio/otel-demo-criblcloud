@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useRangeParam } from '../hooks/useRangeParam';
 import DependencyGraph from '../components/DependencyGraph';
 import IsometricGraph from '../components/IsometricGraph';
 import StatusBanner from '../components/StatusBanner';
@@ -34,7 +35,12 @@ export default function SystemArchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const lookback = searchParams.get('lookback') ?? '-1h';
+  // Unified with Home + Service Detail via ?range=. Keep reading the old
+  // `?lookback=` param as a fallback so stale bookmarks don't silently
+  // snap back to 1h, but write only to `?range=` going forward.
+  const [rangeFromHook, setRange] = useRangeParam('-1h');
+  const legacyLookback = searchParams.get('lookback');
+  const lookback = searchParams.get('range') ?? legacyLookback ?? rangeFromHook;
   const viewParam = searchParams.get('view');
   const view: ViewMode = viewParam === 'isometric' ? 'isometric' : 'graph';
   const [edges, setEdges] = useState<DependencyEdge[]>([]);
@@ -99,9 +105,14 @@ export default function SystemArchPage() {
   }, [lookback]);
 
   function setLookback(value: string) {
-    const next = new URLSearchParams(searchParams);
-    next.set('lookback', value);
-    setSearchParams(next, { replace: false });
+    // Clear the legacy ?lookback= if present so we don't end up with
+    // both keys. The hook handles the canonical ?range= write.
+    if (legacyLookback != null) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('lookback');
+      setSearchParams(next, { replace: true });
+    }
+    setRange(value);
   }
 
   function setView(value: ViewMode) {

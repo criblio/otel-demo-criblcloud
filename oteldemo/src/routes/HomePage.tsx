@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import TimeRangePicker from '../components/TimeRangePicker';
 import { binSecondsFor } from '../components/timeRanges';
 import Sparkline from '../components/Sparkline';
@@ -14,6 +14,7 @@ import {
 import { serviceColor } from '../utils/spans';
 import { serviceHealth, healthRowBg } from '../utils/health';
 import { previousWindow } from '../utils/timeRange';
+import { useRangeParam } from '../hooks/useRangeParam';
 import DeltaChip from '../components/DeltaChip';
 import type {
   ServiceSummary,
@@ -37,6 +38,10 @@ interface SortState {
 }
 
 const DEFAULT_RANGE = '-1h';
+
+/** Minimum previous-window sample count before we trust its percentiles
+ * enough to render a delta chip. Smaller windows produce noisy tails. */
+const MIN_PREV_SAMPLES = 10;
 
 /** Auto-refresh interval options. 0 = off. */
 const REFRESH_OPTIONS: Array<{ label: string; ms: number }> = [
@@ -79,7 +84,11 @@ function relativeTimeMs(rel: string): number {
 }
 
 export default function HomePage() {
-  const [range, setRange] = useState(DEFAULT_RANGE);
+  const [range, setRange] = useRangeParam(DEFAULT_RANGE);
+  const location = useLocation();
+  // Passthrough the current search string (including ?range=) so
+  // clicking into a service detail keeps the range context.
+  const drillSuffix = location.search;
   const [summaries, setSummaries] = useState<ServiceSummary[]>([]);
   const [prevSummaries, setPrevSummaries] = useState<ServiceSummary[]>([]);
   const [buckets, setBuckets] = useState<ServiceBucket[]>([]);
@@ -321,19 +330,25 @@ export default function HomePage() {
                 const p95Spark = sparksByService.p95.get(svc.service) ?? [];
                 const health = serviceHealth(svc);
                 const rowBg = healthRowBg(health.bucket);
-                const prev = prevByService.get(svc.service);
+                // Only compare against the previous window when it had
+                // enough samples to trust the percentiles. Without this,
+                // services with tiny prev-window volume (flagd, image-
+                // provider) produce noisy chips that misfire in the
+                // wrong direction.
+                const prevRaw = prevByService.get(svc.service);
+                const prev = prevRaw && prevRaw.requests >= MIN_PREV_SAMPLES ? prevRaw : undefined;
                 const prevReqPerMin = prev ? reqPerMin(prev.requests) : undefined;
                 return (
                   <tr
                     key={svc.service}
                     style={rowBg !== 'transparent' ? { background: rowBg } : undefined}
                     onClick={() =>
-                      (window.location.href = `./service/${encodeURIComponent(svc.service)}`)
+                      (window.location.href = `./service/${encodeURIComponent(svc.service)}${drillSuffix}`)
                     }
                   >
                     <td>
                       <Link
-                        to={`/service/${encodeURIComponent(svc.service)}`}
+                        to={`/service/${encodeURIComponent(svc.service)}${drillSuffix}`}
                         className={s.svcCell}
                         onClick={(e) => e.stopPropagation()}
                         style={{ textDecoration: 'none', color: 'inherit' }}
@@ -367,10 +382,18 @@ export default function HomePage() {
                         curr={svc.p95Us}
                         prev={prev?.p95Us}
                         mode="rel"
-                        threshold={20}
+                        threshold={30}
                       />
                     </td>
-                    <td className={s.num}>{fmtUs(svc.p99Us)}</td>
+                    <td className={s.num}>
+                      {fmtUs(svc.p99Us)}
+                      <DeltaChip
+                        curr={svc.p99Us}
+                        prev={prev?.p99Us}
+                        mode="rel"
+                        threshold={30}
+                      />
+                    </td>
                     <td className={s.sparkCell}>
                       <Sparkline
                         data={reqSpark}

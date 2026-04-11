@@ -54,14 +54,36 @@ export interface TraceSummary {
   services: string[];
 }
 
-/** Dependency edge for the System Architecture graph. */
+/**
+ * Dependency edge for the System Architecture graph.
+ *
+ * Two kinds exist:
+ *  - `rpc` (default): edges derived from parent→child span relationships,
+ *    i.e. gRPC / HTTP call chains where the callee span is a child of
+ *    the caller's span.
+ *  - `messaging`: edges derived from producer/consumer pairs via the
+ *    OTel `messaging.*` attributes. The producer and consumer typically
+ *    live in different traces so they wouldn't otherwise appear on the
+ *    graph; the messaging lens queries them separately and reconstructs
+ *    the edge.
+ *
+ * Metrics are attributed differently per kind:
+ *  - `rpc`: p95 is the child span's latency (how long the callee took
+ *    to respond).
+ *  - `messaging`: p95 is the **consumer's** span duration (how long
+ *    the receiver took to process), which is where kafka lag shows up.
+ */
 export interface DependencyEdge {
   parent: string;
   child: string;
   callCount: number;
   errorCount: number;
-  /** p95 latency of the CHILD span on this edge, microseconds. */
+  /** p95 latency of the relevant span on this edge, microseconds. */
   p95DurUs: number;
+  /** How this edge was discovered. Defaults to 'rpc' if missing. */
+  kind?: 'rpc' | 'messaging';
+  /** Topic / queue name for messaging edges only. */
+  topic?: string;
 }
 
 /** Per-service rollup for the Home page catalog + Service detail header. */

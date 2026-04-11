@@ -39,6 +39,10 @@ export interface SimLink extends SimulationLinkDatum<SimNode> {
   errorCount: number;
   /** p95 latency (μs) of the child span on this edge. */
   p95DurUs: number;
+  /** Edge kind — 'rpc' (parent→child span) or 'messaging' (kafka etc.). */
+  kind: 'rpc' | 'messaging';
+  /** Topic name for messaging edges, undefined for rpc. */
+  topic?: string;
 }
 
 interface Options {

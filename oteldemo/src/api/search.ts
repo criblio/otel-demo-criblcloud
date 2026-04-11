@@ -4,7 +4,7 @@
  */
 import { runQuery } from './cribl';
 import * as Q from './queries';
-import { toJaegerTraces, summarizeTrace, toDependencyEdges } from './transform';
+import { toJaegerTraces, summarizeTrace, toDependencyEdges, toMessagingEdges } from './transform';
 import type {
   TraceSummary,
   JaegerTrace,
@@ -79,12 +79,29 @@ export async function getTrace(
   return traces[0] ?? null;
 }
 
+/**
+ * Fetch the full set of dependency edges for the System Architecture
+ * graph. Runs two queries in parallel:
+ *   1. RPC edges via parent→child span self-join (dependencies()).
+ *   2. Messaging edges via OTel messaging.* attributes
+ *      (messagingDependencies()), which catch kafka-style async flows
+ *      where producer and consumer live in different traces and so
+ *      would otherwise be invisible on the graph.
+ *
+ * Both sets are merged; messaging edges are tagged with kind='messaging'
+ * so the graph can render them differently (dashed stroke in the 2D view).
+ * If the messaging query returns nothing (no async services) the result
+ * is functionally identical to the old RPC-only edge list.
+ */
 export async function getDependencies(
   earliest = '-1h',
   latest = 'now',
 ): Promise<DependencyEdge[]> {
-  const rows = await runQuery(Q.dependencies(), earliest, latest, 1000);
-  return toDependencyEdges(rows);
+  const [rpcRows, msgRows] = await Promise.all([
+    runQuery(Q.dependencies(), earliest, latest, 1000),
+    runQuery(Q.messagingDependencies(), earliest, latest, 1000).catch(() => []),
+  ]);
+  return [...toDependencyEdges(rpcRows), ...toMessagingEdges(msgRows)];
 }
 
 function toNum(v: unknown): number {
@@ -118,12 +135,17 @@ function toObject(v: unknown): Record<string, unknown> {
   return {};
 }
 
-/** Fetch the per-service rollup. */
+/**
+ * Fetch the per-service rollup. When `service` is provided, the query
+ * is pre-filtered to that service at the KQL level — a big speedup on
+ * Service Detail (see serviceSummary() docstring).
+ */
 export async function listServiceSummaries(
   earliest = '-1h',
   latest = 'now',
+  service?: string,
 ): Promise<ServiceSummary[]> {
-  const rows = await runQuery(Q.serviceSummary(), earliest, latest, 500);
+  const rows = await runQuery(Q.serviceSummary(service), earliest, latest, 500);
   return rows.map((r) => {
     const requests = toNum(r.requests);
     const errors = toNum(r.errors);

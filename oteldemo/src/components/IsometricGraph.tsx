@@ -118,7 +118,10 @@ export default function IsometricGraph({
       nodeMap.get(e.parent)!.size += e.callCount;
       nodeMap.get(e.child)!.size += e.callCount;
       if (e.parent === e.child) continue;
-      const key = `${e.parent}\u0000${e.child}`;
+      const kind = e.kind ?? 'rpc';
+      // Keep rpc and messaging edges DISTINCT even for the same pair —
+      // see DependencyGraph.tsx for the full rationale.
+      const key = `${kind}\u0000${e.parent}\u0000${e.child}`;
       const existing = linkAgg.get(key);
       if (existing) {
         existing.value += e.callCount;
@@ -131,6 +134,8 @@ export default function IsometricGraph({
           value: e.callCount,
           errorCount: e.errorCount,
           p95DurUs: e.p95DurUs,
+          kind,
+          topic: e.topic,
         });
       }
     }
@@ -421,6 +426,11 @@ export default function IsometricGraph({
               edgeHealth.bucket !== 'healthy' && edgeHealth.bucket !== 'idle';
             const baseStroke = hasErrors ? edgeHealth.color : '#9ca3af';
             const stroke = isHighlighted ? '#0190ff' : baseStroke;
+            const isMessaging = l.kind === 'messaging';
+            const dashArray = isMessaging ? '6 4' : undefined;
+            const kindLabel = isMessaging
+              ? `messaging${l.topic ? ` (${l.topic})` : ''}`
+              : 'rpc';
             return (
               <line
                 key={i}
@@ -436,12 +446,13 @@ export default function IsometricGraph({
                   1,
                   Math.log10(l.value + 1) + (hasErrors ? 1 : 0),
                 )}
+                strokeDasharray={dashArray}
                 markerEnd={
                   isHighlighted ? 'url(#isoArrowActive)' : 'url(#isoArrow)'
                 }
               >
                 <title>
-                  {`${srcId} → ${tgtId}\n${l.value.toLocaleString()} calls, ${l.errorCount.toLocaleString()} errors (${((l.value > 0 ? l.errorCount / l.value : 0) * 100).toFixed(2)}%)\np95 ${formatDurationUs(l.p95DurUs)}`}
+                  {`${srcId} → ${tgtId}  [${kindLabel}]\n${l.value.toLocaleString()} calls, ${l.errorCount.toLocaleString()} errors (${((l.value > 0 ? l.errorCount / l.value : 0) * 100).toFixed(2)}%)\np95 ${formatDurationUs(l.p95DurUs)}`}
                 </title>
               </line>
             );

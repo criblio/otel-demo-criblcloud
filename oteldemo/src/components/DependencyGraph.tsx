@@ -94,7 +94,12 @@ export default function DependencyGraph({
       nodeMap.get(e.parent)!.size += e.callCount;
       nodeMap.get(e.child)!.size += e.callCount;
       if (e.parent === e.child) continue;
-      const key = `${e.parent}\u0000${e.child}`;
+      const kind = e.kind ?? 'rpc';
+      // Keep rpc and messaging edges as DISTINCT links even for the
+      // same (parent, child) pair. They mean different things (sync
+      // call vs async queue hop) and users should see both. Use kind
+      // as part of the aggregation key.
+      const key = `${kind}\u0000${e.parent}\u0000${e.child}`;
       const existing = linkAgg.get(key);
       if (existing) {
         existing.value += e.callCount;
@@ -110,6 +115,8 @@ export default function DependencyGraph({
           value: e.callCount,
           errorCount: e.errorCount,
           p95DurUs: e.p95DurUs,
+          kind,
+          topic: e.topic,
         });
       }
     }
@@ -296,6 +303,14 @@ export default function DependencyGraph({
             const hasErrors = edgeHealth.bucket !== 'healthy' && edgeHealth.bucket !== 'idle';
             const baseStroke = hasErrors ? edgeHealth.color : '#9ca3af';
             const stroke = isHighlighted ? '#0190ff' : baseStroke;
+            const isMessaging = l.kind === 'messaging';
+            // Dashed stroke distinguishes async/messaging edges from
+            // synchronous RPC edges even when the pair of services is
+            // the same. Dash pattern scales roughly with line width.
+            const dashArray = isMessaging ? '6 4' : undefined;
+            const kindLabel = isMessaging
+              ? `messaging${l.topic ? ` (${l.topic})` : ''}`
+              : 'rpc';
             return (
               <line
                 key={i}
@@ -311,12 +326,13 @@ export default function DependencyGraph({
                   1,
                   Math.log10(l.value + 1) + (hasErrors ? 1 : 0),
                 )}
+                strokeDasharray={dashArray}
                 markerEnd={
                   isHighlighted ? 'url(#arrowheadActive)' : 'url(#arrowhead)'
                 }
               >
                 <title>
-                  {`${sourceId} → ${targetId}\n${l.value.toLocaleString()} calls, ${l.errorCount.toLocaleString()} errors (${((l.value > 0 ? l.errorCount / l.value : 0) * 100).toFixed(2)}%)\np95 ${formatDurationUs(l.p95DurUs)}`}
+                  {`${sourceId} → ${targetId}  [${kindLabel}]\n${l.value.toLocaleString()} calls, ${l.errorCount.toLocaleString()} errors (${((l.value > 0 ? l.errorCount / l.value : 0) * 100).toFixed(2)}%)\np95 ${formatDurationUs(l.p95DurUs)}`}
                 </title>
               </line>
             );
