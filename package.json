@@ -1,0 +1,16 @@
+{
+  "name": "otel-demo-criblcloud-scripts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local browser automation scripts for driving a running Chromium via CDP.",
+  "type": "module",
+  "scripts": {
+    "browser:smoke": "node scripts/browser-smoke.js"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.59.1"
+  },
+  "dependencies": {
+    "react-force-graph-2d": "^1.29.1"
+  }
+}
