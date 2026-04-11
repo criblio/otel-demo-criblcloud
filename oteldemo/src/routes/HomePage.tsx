@@ -5,13 +5,11 @@ import { binSecondsFor } from '../components/timeRanges';
 import Sparkline from '../components/Sparkline';
 import StatusBanner from '../components/StatusBanner';
 import TraceClassList, { type ClassItem } from '../components/TraceClassList';
-import OperationAnomalyList from '../components/OperationAnomalyList';
 import {
   listServiceSummaries,
   getServiceTimeSeries,
   listSlowTraceClasses,
   listErrorClasses,
-  listOperationAnomalies,
 } from '../api/search';
 import { serviceColor } from '../utils/spans';
 import { serviceHealth, healthRowBg } from '../utils/health';
@@ -24,8 +22,21 @@ import type {
   ServiceBucket,
   SlowTraceClass,
   ErrorClass,
-  OperationAnomaly,
 } from '../api/types';
+
+// NOTE: the latency-anomaly widget + its fetch wiring were removed
+// from this page pending ROADMAP §2b (durable baselines via
+// scheduled Cribl Saved Searches). The in-memory 24h baseline it
+// needed cost ~22s per refresh and couldn't survive incidents
+// older than the baseline window, which made it fire noisily.
+// The building blocks are parked intact and ready to plug back in
+// once the baseline source is durable:
+//   - src/components/OperationAnomalyList.tsx
+//   - src/api/search.ts::listOperationAnomalies
+//   - src/api/queries.ts::allOperationsSummary
+//   - src/api/types.ts::OperationAnomaly
+//   - src/utils/health.ts::latency_anomaly bucket + serviceHealth
+//     `anomalousServices` arg (currently always undefined)
 import s from './HomePage.module.css';
 
 type SortKey =
@@ -99,12 +110,10 @@ export default function HomePage() {
   const [buckets, setBuckets] = useState<ServiceBucket[]>([]);
   const [slowClasses, setSlowClasses] = useState<SlowTraceClass[]>([]);
   const [errorClasses, setErrorClasses] = useState<ErrorClass[]>([]);
-  const [anomalies, setAnomalies] = useState<OperationAnomaly[]>([]);
   const [loadingSummaries, setLoadingSummaries] = useState(true);
   const [loadingBuckets, setLoadingBuckets] = useState(true);
   const [loadingSlow, setLoadingSlow] = useState(true);
   const [loadingErrors, setLoadingErrors] = useState(true);
-  const [loadingAnomalies, setLoadingAnomalies] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshMs, setRefreshMs] = useState<number>(DEFAULT_REFRESH_MS);
   const [sort, setSort] = useState<SortState>({ key: 'requests', dir: 'desc' });
@@ -122,7 +131,6 @@ export default function HomePage() {
     setLoadingBuckets(true);
     setLoadingSlow(true);
     setLoadingErrors(true);
-    setLoadingAnomalies(true);
 
     // Fan out — we want the table to populate as soon as summaries arrive,
     // and the sparklines + bottom panels to fill in independently.
@@ -156,35 +164,7 @@ export default function HomePage() {
       .catch(() => setErrorClasses([]))
       .finally(() => setLoadingErrors(false));
 
-    // Latency anomaly detection — runs two KQL queries (current
-    // window + 24h rolling baseline), joins client-side. A long
-    // baseline is necessary: an incident that's been running longer
-    // than the current window would poison a same-length prior
-    // window too, and the anomaly would sit hidden at ratio ≈1×.
-    // 24h covers 23h of healthy history for any incident ≤1h old.
-    //
-    // This is the current approximation — see ROADMAP for the
-    // scheduled-search-backed durable-baseline plan that replaces it.
-    //
-    // Non-fatal on failure; the widget simply shows empty.
-    const pAnomalies = listOperationAnomalies(
-      range,
-      'now',
-      '-25h',
-      range,
-    )
-      .then((r) => setAnomalies(r))
-      .catch(() => setAnomalies([]))
-      .finally(() => setLoadingAnomalies(false));
-
-    await Promise.allSettled([
-      pSummaries,
-      pPrevSummaries,
-      pBuckets,
-      pSlow,
-      pErrors,
-      pAnomalies,
-    ]);
+    await Promise.allSettled([pSummaries, pPrevSummaries, pBuckets, pSlow, pErrors]);
     setLastRefresh(Date.now());
     // streamFilterEnabled is intentionally in the dep list — the
     // queries pick it up from module state at build time, but the
@@ -218,15 +198,6 @@ export default function HomePage() {
     for (const svc of prevSummaries) m.set(svc.service, svc);
     return m;
   }, [prevSummaries]);
-
-  // Services with at least one operation latency anomaly — used by
-  // serviceHealth() to tint the row cyan when a service has any
-  // anomalous op, regardless of where it ranks in the anomaly widget.
-  const anomalousServices = useMemo(() => {
-    const set = new Set<string>();
-    for (const a of anomalies) set.add(a.service);
-    return set;
-  }, [anomalies]);
 
   // Group time-series buckets by service for sparklines
   const sparksByService = useMemo(() => {
@@ -390,12 +361,14 @@ export default function HomePage() {
                 // wrong direction.
                 const prevRaw = prevByService.get(svc.service);
                 const prev = prevRaw && prevRaw.requests >= MIN_PREV_SAMPLES ? prevRaw : undefined;
-                // serviceHealth takes the previous window + the
-                // anomalous-services set so it can promote to
-                // `traffic_drop` (rate fell off) or `latency_anomaly`
-                // (specific op is 5×+ slower than baseline) — the
-                // two signals error-rate-only bucketing misses.
-                const health = serviceHealth(svc, prevRaw, anomalousServices);
+                // serviceHealth takes the previous window so it can
+                // promote to `traffic_drop` when requests fall off
+                // sharply vs baseline — the classic kafka-lag /
+                // starved-consumer signal that error-rate-only
+                // bucketing misses. The `latency_anomaly` path is
+                // plumbed but disabled until ROADMAP §2b lands a
+                // durable baseline source.
+                const health = serviceHealth(svc, prevRaw);
                 const rowBg = healthRowBg(health.bucket);
                 const prevReqPerMin = prev ? reqPerMin(prev.requests) : undefined;
                 return (
@@ -480,18 +453,6 @@ export default function HomePage() {
             </tbody>
           </table>
         )}
-      </div>
-
-      {/* Anomalies panel — sits above the slow/error row so it reads
-          first. Full-width because anomaly rows carry more text
-          (op name + before/after p95 + count + ratio pill) and would
-          clip in a half-column. */}
-      <div className={s.panelsFull}>
-        <OperationAnomalyList
-          items={anomalies}
-          loading={loadingAnomalies}
-          lookback={range}
-        />
       </div>
 
       {/* Bottom panels: slow trace classes + error classes */}

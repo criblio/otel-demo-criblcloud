@@ -263,14 +263,6 @@
   gap: var(--cds-space-lg);
 }
 
-/* Single full-width panel row — used by the latency-anomaly widget,
- * which sits above the two-column slow/error row. */
-.panelsFull {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--cds-space-lg);
-}
-
 @media (max-width: 900px) {
   .panels {
     grid-template-columns: 1fr;

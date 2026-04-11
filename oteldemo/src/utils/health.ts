@@ -71,12 +71,16 @@ export function healthRowBg(bucket: HealthBucket): string {
   return HEALTH_BG[bucket];
 }
 
+// `latency_anomaly` is intentionally absent from HEALTH_LEGEND right
+// now because nothing in the app actually feeds `anomalousServices`
+// into `serviceHealth()`. See the HomePage.tsx breadcrumb and
+// ROADMAP §2b for why — re-add this line when the durable baseline
+// source lands and the widget gets re-wired.
 export const HEALTH_LEGEND: Array<{ bucket: HealthBucket; color: string; label: string }> = [
   { bucket: 'healthy', ...HEALTH.healthy },
   { bucket: 'watch', ...HEALTH.watch },
   { bucket: 'warn', ...HEALTH.warn },
   { bucket: 'critical', ...HEALTH.critical },
-  { bucket: 'latency_anomaly', ...HEALTH.latency_anomaly },
   { bucket: 'traffic_drop', ...HEALTH.traffic_drop },
   { bucket: 'idle', ...HEALTH.idle },
 ];
