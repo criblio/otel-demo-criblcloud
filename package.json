@@ -9,8 +9,5 @@
   },
   "devDependencies": {
     "playwright-core": "^1.59.1"
-  },
-  "dependencies": {
-    "react-force-graph-2d": "^1.29.1"
   }
 }
