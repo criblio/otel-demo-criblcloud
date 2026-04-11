@@ -8,7 +8,7 @@
  * Spans are identified by isnotnull(end_time_unix_nano).
  */
 import { getCurrentDataset } from './dataset';
-import { streamFilterKqlClause } from './streamFilter';
+import { streamFilterKqlClause, streamFilterSpanKqlClause } from './streamFilter';
 
 function quoteDataset(): string {
   // The dataset name must be a simple identifier to embed safely as
@@ -143,6 +143,10 @@ export function traceSpans(traceIds: string[]): string {
  * the dataset, which becomes very slow under load (tens of seconds
  * during kafka/flood scenarios). With the filter, the scan is
  * proportional to just that service's traffic.
+ *
+ * Applies the span-level stream filter (dropping spans > 30s) when
+ * enabled, so streaming and idle-wait spans don't distort the
+ * service percentiles. See api/streamFilter.ts.
  */
 export function serviceSummary(service?: string): string {
   const svcFilter = service
@@ -153,6 +157,7 @@ export function serviceSummary(service?: string): string {
             dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
             is_error=(tostring(status.code)=="2")
     ${svcFilter}
+    ${streamFilterSpanKqlClause()}
     | summarize requests=count(),
                 errors=countif(is_error),
                 p50_us=percentile(dur_us, 50),
@@ -178,6 +183,7 @@ export function serviceTimeSeries(binSeconds: number, service?: string): string 
             dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
             is_error=(tostring(status.code)=="2")
     ${svcFilter}
+    ${streamFilterSpanKqlClause()}
     | summarize requests=count(),
                 errors=countif(is_error),
                 p50_us=percentile(dur_us, 50),
@@ -198,6 +204,7 @@ export function serviceOperations(service: string): string {
             dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
             is_error=(tostring(status.code)=="2")
     | where svc=="${s}"
+    ${streamFilterSpanKqlClause()}
     | summarize requests=count(),
                 errors=countif(is_error),
                 p50_us=percentile(dur_us, 50),
@@ -423,6 +430,7 @@ export function messagingDependencies(): string {
             msg_dest=tostring(attributes['messaging.destination.name']),
             msg_system=tostring(attributes['messaging.system'])
     | where isnotempty(msg_dest) and isnotempty(msg_op)
+    ${streamFilterSpanKqlClause()}
     | summarize spans=count(),
                 errors=countif(is_error),
                 p95_us=percentile(dur_us, 95)
@@ -447,6 +455,7 @@ export function dependencies(): string {
             dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0,
             is_error=(tostring(status.code)=="2")
     | where parent != "" and isnotempty(parent)
+    ${streamFilterSpanKqlClause()}
     | project trace_id, parent, svc, dur_us, is_error
     | join kind=inner (
         ${spansBase()}

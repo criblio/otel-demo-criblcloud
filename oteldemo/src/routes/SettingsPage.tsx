@@ -182,11 +182,10 @@ export default function SettingsPage() {
       <div className={s.card}>
         <h2 className={s.sectionTitle}>Noise filters</h2>
         <p className={s.sectionHelp}>
-          Heuristics that hide traces which are long but not actionable —
-          persistent gRPC streams (e.g. flagd.evaluation <code>/EventStream</code>),
-          SSE / websocket long-polls, and kafka-consumer idle-wait loops.
-          Default on. Turn off if you want to see those traces in the Home
-          Slowest panel or Search results.
+          Heuristics that keep streaming / idle-wait traces from distorting
+          aggregate statistics — persistent gRPC streams (e.g.
+          flagd.evaluation <code>/EventStream</code>), SSE / websocket
+          long-polls, and kafka-consumer idle-wait loops. Default on.
         </p>
 
         <label className={s.toggleRow}>
@@ -197,11 +196,13 @@ export default function SettingsPage() {
             onChange={(e) => void handleStreamFilterToggle(e.target.checked)}
           />
           <div>
-            <div className={s.toggleTitle}>Hide long-poll / idle-wait traces</div>
+            <div className={s.toggleTitle}>Hide long-poll / idle-wait traces from aggregates</div>
             <div className={s.toggleSub}>
-              Filters traces where no child span accounts for at least 10% of the
-              total duration and the trace is longer than 30s. Affects Home Slowest
-              trace classes, Search results, and Service Detail panels.
+              Drops individual spans longer than 30s from service percentiles,
+              top-operations, and dependency-edge stats, and hides trace-level
+              stream/idle-wait patterns from the Home "Slowest trace classes"
+              panel. <strong>Search is unaffected</strong> — explicit trace
+              searches always return whatever matches.
             </div>
           </div>
         </label>

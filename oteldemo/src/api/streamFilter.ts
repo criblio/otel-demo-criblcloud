@@ -104,23 +104,23 @@ export function subscribeStreamFilter(fn: () => void): () => void {
 }
 
 /**
- * KQL fragment that filters out long-poll / idle-wait traces, meant
- * to be appended to a pipeline that has already summarized by
- * trace_id and computed these columns:
+ * **Trace-level** KQL fragment for slow-trace listings. Appended to a
+ * pipeline that has already summarized by trace_id and computed:
  *   - trace_dur_us (number)
  *   - span_count (number, total spans in the trace)
- *   - max_non_root_dur_us (number, may be null if the trace has no
- *     non-root spans at all — treated as 0)
+ *   - max_non_root_dur_us (number, may be null if no non-root spans)
  *
- * Returns an empty string when the filter is disabled, so callers
- * can unconditionally splice it into their query templates. When
- * enabled, returns `extend` and `where` clauses.
+ * Used by the Home "Slowest trace classes" panel and equivalent
+ * Service Detail panels.
  *
- * IMPORTANT: this string is read at query-build time, not at runtime
- * of an already-built query. Pages that need the filter to take
- * effect immediately when the setting changes should subscribe via
+ * Returns an empty string when the filter is disabled, so callers can
+ * unconditionally splice it into query templates. When enabled it
+ * emits an `| extend ... | where not (...)` pair.
+ *
+ * IMPORTANT: this is read at query-build time. Pages that want the
+ * filter to take effect immediately on toggle should subscribe via
  * useStreamFilterEnabled() and include the value in their useEffect
- * deps — that way the next fetch rebuilds the query.
+ * deps so the next fetch rebuilds the query.
  */
 export function streamFilterKqlClause(): string {
   if (!enabled) return '';
@@ -129,34 +129,40 @@ export function streamFilterKqlClause(): string {
 }
 
 /**
- * Client-side filter for a fully-loaded JaegerTrace. Used by
- * findTraces() which performs a two-stage query (find IDs → fetch
- * spans) and so has the full trace in memory by the time it can
- * decide what to drop.
+ * **Span-level** KQL fragment for aggregation queries that compute
+ * percentiles and counts over raw spans (not trace-level rollups).
+ * Appended to a pipeline that has already computed a `dur_us` column
+ * on each span.
  *
- * Applies the same combined rule as the server-side KQL clause:
- * trace is filtered when it is long AND (span_count is small OR
- * root self-time dominates).
+ * Why a different filter shape: percentile queries don't have
+ * trace-wide context (span count, max_non_root_dur) because they
+ * aggregate across spans, not traces. At the span level the cleanest
+ * heuristic is a duration cap: any individual span longer than
+ * STREAM_DURATION_US (30s) is almost certainly a streaming connection
+ * or an idle-wait loop. Empirically verified against the OTel demo
+ * dataset — in a typical hour, every span > 30s is either a
+ * flagd.evaluation.v1.Service/EventStream or an accounting
+ * order-consumed idle-wait root. Nothing legitimate crosses 30s.
  *
- * Returns true if the trace should be HIDDEN.
+ * The cap is strict: it filters out the ENTIRE span, including its
+ * contribution to service percentiles, operation percentiles, and
+ * dependency-edge stats. This is what "hide the noise from summaries"
+ * means in practice.
+ *
+ * Affects (via the query builders in queries.ts):
+ *   - serviceSummary / listServiceSummaries (Home catalog + ServiceDetail hero)
+ *   - serviceTimeSeries (ServiceDetail RED charts)
+ *   - serviceOperations (ServiceDetail Top Operations)
+ *   - dependencies (arch graph RPC edges)
+ *   - messagingDependencies (arch graph messaging edges)
+ *
+ * Does NOT affect:
+ *   - findTraces (Search is an explicit user query — show what was asked for)
+ *   - traceLogs / searchLogs (log queries, not span-duration-based)
+ *   - traceSpans (single-trace detail — show the full trace)
  */
-export function isLongPollTrace(
-  spans: Array<{ duration: number; references: unknown[] }>,
-): boolean {
-  if (!enabled) return false;
-  if (spans.length === 0) return false;
-  // Jaeger-shaped spans carry parent info in `references`, so an
-  // empty references array means the span is the trace root.
-  let traceDurUs = 0;
-  let maxNonRootDurUs = 0;
-  for (const sp of spans) {
-    if (sp.duration > traceDurUs) traceDurUs = sp.duration;
-    if (sp.references.length > 0 && sp.duration > maxNonRootDurUs) {
-      maxNonRootDurUs = sp.duration;
-    }
-  }
-  if (traceDurUs <= STREAM_DURATION_US) return false;
-  if (spans.length < STREAM_MIN_SPAN_COUNT) return true;
-  const ratio = maxNonRootDurUs / traceDurUs;
-  return ratio < STREAM_CHILD_RATIO;
+export function streamFilterSpanKqlClause(): string {
+  if (!enabled) return '';
+  return `| where dur_us < ${STREAM_DURATION_US}`;
 }
+

@@ -5,7 +5,6 @@
 import { runQuery } from './cribl';
 import * as Q from './queries';
 import { toJaegerTraces, summarizeTrace, toDependencyEdges, toMessagingEdges } from './transform';
-import { isLongPollTrace } from './streamFilter';
 import type {
   TraceSummary,
   JaegerTrace,
@@ -47,43 +46,29 @@ export async function findTraces(
   earliest = '-1h',
   latest = 'now',
 ): Promise<SearchResult> {
-  // Stage 1 asks for extra headroom. We'll filter stream/idle-wait
-  // traces out after stage 2 (when we have the full span list and
-  // can compute max_non_root_dur) and we don't want the filter to
-  // push the user's effective result count below their requested
-  // limit. 2x gives us a generous cushion without making the query
-  // materially slower.
-  const requestedLimit = params.limit ?? 20;
-  const stageOneLimit = Math.min(requestedLimit * 2, 200);
-  const rootRows = await runQuery(
-    Q.findTraces({ ...params, limit: stageOneLimit }),
-    earliest,
-    latest,
-    stageOneLimit,
-  );
+  const rootRows = await runQuery(Q.findTraces(params), earliest, latest, params.limit ?? 20);
   const traceIds = rootRows.map((r) => String(r.trace_id)).filter(Boolean);
   if (traceIds.length === 0) {
     return { summaries: [], traces: new Map() };
   }
 
   // Fetch all spans for the matching trace IDs in one query.
+  // Note: no long-poll filter is applied here. Search is an explicit
+  // user query — if they asked for a service/operation, they should
+  // see what they asked for, including streams and idle-wait traces.
+  // The stream filter only affects aggregate statistics (service
+  // percentiles, top operations, dependency edges, slow-trace
+  // rankings), not individual trace listings.
   const spanRows = await runQuery(Q.traceSpans(traceIds), earliest, latest, 10000);
   const traces = toJaegerTraces(spanRows);
   const traceMap = new Map<string, JaegerTrace>();
   for (const t of traces) traceMap.set(t.traceID, t);
 
-  // Preserve the root-span order (by recency). Filter out long-poll /
-  // idle-wait traces using the full span list now that we have it.
+  // Preserve the root-span order (by recency)
   const summaries: TraceSummary[] = [];
   for (const id of traceIds) {
     const tr = traceMap.get(id);
-    if (!tr) continue;
-    if (isLongPollTrace(tr.spans)) {
-      traceMap.delete(id);
-      continue;
-    }
-    summaries.push(summarizeTrace(tr));
-    if (summaries.length >= requestedLimit) break;
+    if (tr) summaries.push(summarizeTrace(tr));
   }
 
   return { summaries, traces: traceMap };
