@@ -536,48 +536,109 @@ export interface MetricSeriesParams {
   /** Bucket width in seconds for the time bucket. */
   binSeconds: number;
   /** Aggregation function to apply over the bucketed values. */
-  agg: 'avg' | 'sum' | 'min' | 'max' | 'count';
+  agg:
+    | 'avg'
+    | 'sum'
+    | 'min'
+    | 'max'
+    | 'count'
+    | 'p50'
+    | 'p75'
+    | 'p95'
+    | 'p99'
+    | 'rate';
+  /**
+   * Optional group-by dimension key. When set, the summarize
+   * partitions the result by that attribute (e.g. "service.name",
+   * "rpc.method"). Dimension is accessed via bracket-quoted syntax
+   * and stringified, matching how metric records expose top-level
+   * attributes.
+   */
+  groupBy?: string;
+}
+
+/**
+ * Translate an aggregation choice to a KQL expression over `_value`.
+ * `count` has no argument, `rate` is really `max(_value)` (client
+ * computes the delta), and `pN` goes through `percentile`.
+ */
+function metricAggExpr(agg: MetricSeriesParams['agg']): string {
+  switch (agg) {
+    case 'count':
+      return 'count()';
+    case 'rate':
+      // Rate is computed client-side from successive bucket maxes —
+      // for monotonic counters the max within a bucket is the latest
+      // cumulative count, and the rate is (Δcount / Δbucket).
+      return 'max(toreal(_value))';
+    case 'p50':
+      return 'percentile(toreal(_value), 50)';
+    case 'p75':
+      return 'percentile(toreal(_value), 75)';
+    case 'p95':
+      return 'percentile(toreal(_value), 95)';
+    case 'p99':
+      return 'percentile(toreal(_value), 99)';
+    default:
+      return `${agg}(toreal(_value))`;
+  }
 }
 
 /**
  * Time-bucketed metric series. Groups by `bin(_time, Ns)` and applies
- * the chosen aggregation over `_value`. The result is a list of
- * `{bucket, val}` pairs sorted by bucket ascending, ready to drop
- * into the existing LineChart component as a LineSeries.
+ * the chosen aggregation over `_value`. Optionally partitions by a
+ * group-by dimension, producing one series per dimension value.
  *
- * A few notes on semantics:
+ * Semantics:
  *
- *  - For gauges (e.g. `k8s.container.memory_request`) `avg` over the
+ *  - **Gauges** (e.g. `k8s.container.memory_request`): `avg` over the
  *    bucket gives the expected "value at that time" since gauges are
  *    sampled periodically.
- *  - For histograms (e.g. `rpc.client.duration`) `_value` is the
- *    pre-computed mean across the collector's export interval, so
- *    `avg(_value)` is a mean-of-means — close enough for the overview
- *    but not a true percentile. Real percentiles would require
- *    parsing the cumulative bucket map, which is a v2 enhancement.
- *  - For counters (e.g. `traces.span.metrics.calls`) `_value` is
- *    cumulative and monotonic, so `avg` trends upward over time.
- *    `max(_value)` per bucket gives the latest cumulative count in
- *    that bucket; the rate is then the per-bucket delta, which we
- *    compute client-side in search.ts. A `count(...)` agg returns
- *    the number of raw metric records, useful for sampling overview.
+ *  - **Histograms** (e.g. `rpc.client.duration`): `_value` is the
+ *    pre-computed mean across the collector's export interval.
+ *    `percentile(_value, 95)` is "p95 of per-export means" — not a
+ *    true p95 across raw observations, but directionally correct and
+ *    a meaningful upgrade over plain mean. A real p95 would require
+ *    parsing the cumulative bucket map in `${name}_data._buckets`.
+ *  - **Counters** (e.g. `traces.span.metrics.calls`): `_value` is
+ *    cumulative and monotonic. `rate` asks for `max(_value)` per
+ *    bucket and the client derives the per-bucket delta divided by
+ *    bin width to get a human-readable per-second rate. Plain `max`
+ *    shows the raw cumulative line, which climbs.
+ *  - **`count`** returns the number of raw metric records in each
+ *    bucket, useful for "is this metric still being emitted?" sanity
+ *    checks.
  */
 export function metricTimeSeries(params: MetricSeriesParams): string {
   const m = params.metric.replace(/"/g, '\\"');
   const svcFilter = params.service
     ? `| where svc == "${params.service.replace(/"/g, '\\"')}"`
     : '';
-  // Aggregation function must match the KQL name exactly — map our
-  // 'count' alias to `count()` since it takes no column argument.
-  const aggExpr =
-    params.agg === 'count'
-      ? 'count()'
-      : `${params.agg}(toreal(_value))`;
+  const aggExpr = metricAggExpr(params.agg);
+  // Group-by: append a dimension column to the summarize. Dimension
+  // values are accessed via bracket-quoted syntax (resource attributes
+  // live at the top level of metric records) and coerced to strings.
+  const groupExt = params.groupBy
+    ? `, grp=tostring(['${params.groupBy.replace(/'/g, "\\'")}'])`
+    : '';
+  const groupBy = params.groupBy ? ', grp' : '';
   return `${metricsBase()}
     | where _metric == "${m}"
-    | extend svc=tostring(['service.name'])
+    | extend svc=tostring(['service.name'])${groupExt}
     ${svcFilter}
     | summarize val=${aggExpr}
-      by bucket=bin(_time, ${params.binSeconds}s)
+      by bucket=bin(_time, ${params.binSeconds}s)${groupBy}
     | sort by bucket asc`;
+}
+
+/**
+ * Fetch a single raw metric record so we can sniff its type and
+ * available attribute keys. Returns `_raw` plus any top-level fields
+ * the Cribl query layer materialized. Used by getMetricInfo().
+ */
+export function metricSampleRow(metricName: string): string {
+  const m = metricName.replace(/"/g, '\\"');
+  return `${metricsBase()}
+    | where _metric == "${m}"
+    | limit 1`;
 }

@@ -185,15 +185,70 @@ export interface MetricPoint {
 }
 
 /**
- * A named metric series — typically the result of one
- * `getMetricSeries` call. Holds the metric name, the display
- * aggregation, and the points. Multiple series can be plotted
- * together by the caller when splitting by dimension.
+ * Aggregation operators supported by the metrics explorer. Maps
+ * roughly to KQL functions:
+ *   avg/sum/min/max/count → standard aggregations on _value
+ *   p50/p75/p95/p99        → percentile(_value, N)
+ *   rate                   → max(_value) per bucket, client-side Δ/Δt
+ *                            (use for monotonic counters)
+ */
+export type MetricAgg =
+  | 'avg'
+  | 'sum'
+  | 'min'
+  | 'max'
+  | 'count'
+  | 'p50'
+  | 'p75'
+  | 'p95'
+  | 'p99'
+  | 'rate';
+
+/**
+ * Detected metric "shape". Counter = monotonically increasing
+ * cumulative value (needs rate derivation to be human-readable);
+ * histogram = has a cumulative bucket map in `${name}_data._buckets`
+ * (true percentiles possible); gauge = plain sampled value. `unknown`
+ * is the fallback when no sample is available or the fields don't
+ * match any pattern.
+ */
+export type MetricType = 'counter' | 'gauge' | 'histogram' | 'unknown';
+
+/**
+ * Result of `getMetricInfo(name)`. Type is detected by sniffing a
+ * sample record. `dimensions` is the list of attribute-like keys
+ * found on the sample — candidates for the group-by picker.
+ */
+export interface MetricInfo {
+  name: string;
+  type: MetricType;
+  /** Candidate group-by dimensions (e.g. "service.name", "rpc.method"). */
+  dimensions: string[];
+  /** Explicit unit if the sample carried one, else undefined. */
+  unit?: string;
+}
+
+/**
+ * One series within a MetricSeries result. `key` identifies the
+ * group-by dimension value for this series (empty string when no
+ * group-by is in effect, so the single ungrouped case still fits
+ * the same shape).
+ */
+export interface MetricSeriesGroup {
+  key: string;
+  points: MetricPoint[];
+}
+
+/**
+ * Result of `getMetricSeries` — may be multi-series when group-by
+ * is set. Top-N limiting is applied client-side on the caller's
+ * side; `groups` carries exactly what should be rendered.
  */
 export interface MetricSeries {
   metric: string;
-  agg: 'avg' | 'sum' | 'min' | 'max' | 'count';
-  points: MetricPoint[];
+  agg: MetricAgg;
+  groupBy?: string;
+  groups: MetricSeriesGroup[];
 }
 
 /** OTel span kind numeric values. */

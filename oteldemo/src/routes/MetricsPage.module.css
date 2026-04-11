@@ -224,12 +224,20 @@
   border-radius: var(--cds-radius-lg);
   box-shadow: var(--cds-shadow-sm);
 }
+.metricHeaderTop {
+  display: flex;
+  align-items: center;
+  gap: var(--cds-space-sm);
+  min-width: 0;
+}
 .metricTitle {
   font-family: var(--cds-font-mono);
   font-size: var(--cds-font-size-md);
   font-weight: var(--cds-font-weight-semibold);
   color: var(--cds-color-fg);
   word-break: break-all;
+  flex: 1;
+  min-width: 0;
 }
 .metricMeta {
   margin-top: 4px;
@@ -239,4 +247,50 @@
 .metricMeta strong {
   color: var(--cds-color-fg);
   font-weight: var(--cds-font-weight-semibold);
+}
+.metricMetaWarn {
+  margin-top: 4px;
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-warning);
+  font-style: italic;
+}
+
+/* Type badge colors — discriminates the three OTel metric shapes
+ * at a glance without needing the user to know the vocabulary. */
+.typeBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: var(--cds-font-weight-semibold);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  border-radius: var(--cds-radius-sm);
+  flex-shrink: 0;
+}
+.type_counter {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+.type_gauge {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+.type_histogram {
+  background: rgba(234, 88, 12, 0.12);
+  color: #c2410c;
+}
+.type_unknown {
+  background: var(--cds-color-bg-subtle);
+  color: var(--cds-color-fg-muted);
+}
+
+/* Rate pill sits under the basic aggregation grid so it's visually
+ * one-off — rate is only meaningful for counters and sliding it
+ * next to avg/sum/min/max/count would make the layout suggest
+ * otherwise. */
+.rateBtn {
+  margin-top: 6px;
+  width: 100%;
+  font-family: var(--cds-font-mono);
+  font-size: 11px;
 }

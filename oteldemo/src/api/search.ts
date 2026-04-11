@@ -18,6 +18,9 @@ import type {
   ErrorClass,
   MetricSummary,
   MetricSeries,
+  MetricSeriesGroup,
+  MetricInfo,
+  MetricType,
 } from './types';
 
 export async function listServices(earliest = '-1h'): Promise<string[]> {
@@ -447,9 +450,12 @@ export async function listMetricServices(
 }
 
 /**
- * Fetch a time-bucketed metric series. The caller picks the metric
- * name, optional service filter, aggregation function, and bin width;
- * we return {metric, agg, points[]}.
+ * Fetch a time-bucketed metric series. Handles both single-series
+ * and group-by modes; in the single-series case the result has one
+ * group with key="". The `rate` aggregation transforms the server's
+ * `max(_value)` per bucket into per-bucket deltas client-side so
+ * counters render as a human-readable rate instead of a climbing
+ * cumulative line.
  */
 export async function getMetricSeries(
   params: Q.MetricSeriesParams,
@@ -457,11 +463,156 @@ export async function getMetricSeries(
   latest = 'now',
 ): Promise<MetricSeries> {
   const rows = await runQuery(Q.metricTimeSeries(params), earliest, latest, 5000);
-  const points = rows
-    .map((r) => ({
+
+  // Partition rows into groups by the group-by key (empty string when
+  // no group-by is set, so the single-series case stays uniform).
+  const byKey = new Map<string, Array<{ t: number; v: number }>>();
+  for (const r of rows) {
+    const key = params.groupBy ? String(r.grp ?? '') : '';
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key)!.push({
       t: toNum(r.bucket) * 1000,
       v: toNum(r.val),
-    }))
-    .sort((a, b) => a.t - b.t);
-  return { metric: params.metric, agg: params.agg, points };
+    });
+  }
+
+  // Sort each series by time, then optionally rate-derive.
+  const groups: MetricSeriesGroup[] = [];
+  for (const [key, points] of byKey) {
+    points.sort((a, b) => a.t - b.t);
+    const derived =
+      params.agg === 'rate'
+        ? deriveRate(points, params.binSeconds)
+        : points;
+    groups.push({ key, points: derived });
+  }
+
+  return {
+    metric: params.metric,
+    agg: params.agg,
+    groupBy: params.groupBy,
+    groups,
+  };
+}
+
+/**
+ * Convert a monotonic cumulative counter series into a per-second
+ * rate series. For each point after the first, rate = Δvalue / Δt.
+ * Counter resets (value decreased) are treated as a reset from zero
+ * — the delta is then just the new cumulative value, divided by the
+ * elapsed bucket time. Negative rates are clamped to zero.
+ *
+ * The first sample has no prior point to diff against and is dropped.
+ * `binSeconds` is used only when Δt can't be computed from the
+ * points themselves (it shouldn't happen with well-formed data).
+ */
+function deriveRate(
+  points: Array<{ t: number; v: number }>,
+  binSeconds: number,
+): Array<{ t: number; v: number }> {
+  if (points.length < 2) return [];
+  const out: Array<{ t: number; v: number }> = [];
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const cur = points[i];
+    const dtSec = Math.max(1, (cur.t - prev.t) / 1000 || binSeconds);
+    let delta = cur.v - prev.v;
+    if (delta < 0) {
+      // Counter reset — assume restart from zero, so the delta this
+      // bucket is just the current cumulative value.
+      delta = cur.v;
+    }
+    const rate = delta / dtSec;
+    out.push({ t: cur.t, v: rate < 0 ? 0 : rate });
+  }
+  return out;
+}
+
+/**
+ * Sniff a metric's type and candidate group-by dimensions by looking
+ * at a single sample record. Cached by the caller — each metric
+ * should only be sniffed once per session.
+ *
+ * Detection rules:
+ *  - Counter: has a `${name}_otel` subobject with `is_monotonic == true`
+ *  - Histogram: has a `${name}_data` subobject with a `_buckets` map
+ *  - Gauge: anything else with a valid sample
+ *  - Unknown: query returned nothing
+ *
+ * Dimensions are every top-level key that looks attribute-like:
+ * contains a `.` (matches OTel semconv like `service.name`,
+ * `rpc.method`) and isn't part of the metric's own data subobject or
+ * generic Cribl metadata.
+ */
+export async function getMetricInfo(
+  metric: string,
+  earliest = '-1h',
+  latest = 'now',
+): Promise<MetricInfo> {
+  const empty: MetricInfo = { name: metric, type: 'unknown', dimensions: [] };
+  if (!metric) return empty;
+  const rows = await runQuery(Q.metricSampleRow(metric), earliest, latest, 1);
+  if (rows.length === 0) return empty;
+
+  const row = rows[0] as Record<string, unknown>;
+
+  // Metadata / non-attribute keys we never treat as dimensions.
+  const IGNORE = new Set([
+    '_time',
+    '_raw',
+    '_metric',
+    '_value',
+    'source',
+    'datatype',
+    'dataset',
+    'schema_url',
+    'scope',
+    'cribl_route',
+    '_datatype_detection',
+  ]);
+
+  let type: MetricType = 'gauge';
+  const dimensions: string[] = [];
+
+  for (const [key, value] of Object.entries(row)) {
+    if (IGNORE.has(key)) continue;
+
+    // The collector stores per-metric structural info under
+    // keys like `${metric}_otel` and `${metric}_data`. Inspect
+    // these to classify the metric, then skip them as dimensions.
+    if (key.endsWith('_otel') || key.endsWith('_data')) {
+      if (
+        key.endsWith('_otel') &&
+        value &&
+        typeof value === 'object' &&
+        'is_monotonic' in (value as Record<string, unknown>) &&
+        (value as Record<string, unknown>).is_monotonic === true
+      ) {
+        type = 'counter';
+      }
+      if (
+        key.endsWith('_data') &&
+        value &&
+        typeof value === 'object' &&
+        '_buckets' in (value as Record<string, unknown>)
+      ) {
+        type = 'histogram';
+      }
+      continue;
+    }
+
+    // Attribute-like keys: dotted names (OTel semconv). Accept
+    // scalars — objects would be sub-structures we don't care about.
+    if (
+      key.includes('.') &&
+      (typeof value === 'string' ||
+        typeof value === 'number' ||
+        typeof value === 'boolean')
+    ) {
+      dimensions.push(key);
+    }
+  }
+
+  dimensions.sort();
+  return { name: metric, type, dimensions };
 }
