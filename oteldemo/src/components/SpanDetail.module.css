@@ -17,10 +17,25 @@
   display: flex;
   align-items: center;
   gap: var(--cds-space-sm);
+  /* Let the ERROR badge wrap to a new line when the operation name is
+   * long enough that it would otherwise push the badge off the right
+   * edge of the panel (seen with flagd streaming op names). */
+  flex-wrap: wrap;
   font-size: var(--cds-font-size-lg);
   font-weight: var(--cds-font-weight-semibold);
   margin-bottom: var(--cds-space-sm);
 }
+
+.titleText {
+  /* Take the available space between the service dot and the error
+   * badge, and allow wrapping within our own line. The `min-width: 0`
+   * is the canonical flex-item fix that lets long unbreakable strings
+   * actually shrink instead of forcing siblings out of the container. */
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
+}
+
 
 .subtitle {
   font-size: var(--cds-font-size-sm);
@@ -87,6 +102,9 @@
   font-size: var(--cds-font-size-xs);
   font-weight: var(--cds-font-weight-semibold);
   margin-left: var(--cds-space-sm);
+  /* Never compress inside the flex title — if there isn't room, the
+   * title's flex-wrap kicks this to a new line instead. */
+  flex-shrink: 0;
 }
 
 .logsList {

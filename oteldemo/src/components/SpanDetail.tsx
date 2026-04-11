@@ -44,7 +44,9 @@ export default function SpanDetail({
     <div className={s.panel}>
       <div className={s.title}>
         <span className={s.serviceDot} style={{ background: color }} />
-        {svc} · {span.operationName}
+        <span className={s.titleText}>
+          {svc} · {span.operationName}
+        </span>
         {isError && <span className={s.errorBadge}>ERROR</span>}
       </div>
       <div className={s.subtitle}>
