@@ -46,6 +46,14 @@ interface Props {
    * "offset from the first log in the result set" is meaningless.
    */
   absoluteTimestamps?: boolean;
+  /**
+   * If true, the list fills the available vertical space of its flex
+   * parent instead of capping at ~560px. Used by the standalone Log
+   * Explorer so the results pane stretches to the bottom of the
+   * viewport. The parent must be a flex column with a constrained
+   * height for this to have an effect.
+   */
+  fillHeight?: boolean;
 }
 
 /** Map OTel severity numbers to severity bucket. */
@@ -80,6 +88,7 @@ export default function TraceLogsView({
   referenceTimeMs,
   compact,
   absoluteTimestamps,
+  fillHeight,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -111,7 +120,7 @@ export default function TraceLogsView({
   }
 
   return (
-    <div className={s.wrap}>
+    <div className={`${s.wrap} ${fillHeight ? s.fill : ''}`}>
       <div className={s.header}>
         <span className={s.title}>
           {title}{' '}

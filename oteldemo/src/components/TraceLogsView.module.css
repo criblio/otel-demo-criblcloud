@@ -6,6 +6,20 @@
   overflow: hidden;
 }
 
+/* fill variant — used by LogsPage so the log list stretches to the
+ * bottom of the viewport instead of capping at 560px. Requires the
+ * parent to be a flex column with a constrained height. */
+.fill {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.fill .list {
+  flex: 1 1 auto;
+  max-height: none;
+}
+
 .header {
   display: flex;
   align-items: baseline;

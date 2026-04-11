@@ -227,6 +227,7 @@ export default function LogsPage() {
               : `${logs.length.toLocaleString()} entr${logs.length === 1 ? 'y' : 'ies'} — newest first`
           }
           absoluteTimestamps
+          fillHeight
           emptyMessage="No logs match these filters."
         />
       </main>

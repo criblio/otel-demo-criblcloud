@@ -5,16 +5,26 @@
  * through long log result lists.
  */
 
+/* The AppShell .content has a definite height (flex:1 within the
+ * shell column). We claim the full content height with `height: 100%`
+ * so the layout is bounded, then chain `min-height: 0` down through
+ * the flex parents so the log list can flex-grow and internally
+ * scroll instead of leaving empty space at the bottom. Using
+ * min-height:100% instead blew out vertically because it's a floor,
+ * not a ceiling — the list just grew to fit all 200 rows. */
 .layout {
   display: flex;
   gap: var(--cds-space-lg);
   padding: var(--cds-space-lg);
-  align-items: flex-start;
+  align-items: stretch;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .sidebar {
   width: 260px;
   flex: 0 0 260px;
+  align-self: flex-start;
   position: sticky;
   top: var(--cds-space-lg);
 }
@@ -53,6 +63,10 @@
 .results {
   flex: 1 1 auto;
   min-width: 0;
+  /* min-height: 0 is the canonical trick that lets a flex column
+   * child shrink below its content height — without it the list
+   * below blows out past the viewport. */
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--cds-space-md);
