@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import TimeRangePicker from '../components/TimeRangePicker';
 import { binSecondsFor } from '../components/timeRanges';
 import Sparkline from '../components/Sparkline';
@@ -86,6 +86,7 @@ function relativeTimeMs(rel: string): number {
 
 export default function HomePage() {
   const [range, setRange] = useRangeParam(DEFAULT_RANGE);
+  const navigate = useNavigate();
   const location = useLocation();
   // Passthrough the current search string (including ?range=) so
   // clicking into a service detail keeps the range context.
@@ -354,7 +355,7 @@ export default function HomePage() {
                     key={svc.service}
                     style={rowBg !== 'transparent' ? { background: rowBg } : undefined}
                     onClick={() =>
-                      (window.location.href = `./service/${encodeURIComponent(svc.service)}${drillSuffix}`)
+                      navigate(`/service/${encodeURIComponent(svc.service)}${drillSuffix}`)
                     }
                   >
                     <td>
