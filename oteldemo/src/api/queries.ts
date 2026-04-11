@@ -347,11 +347,17 @@ export function searchLogs(params: SearchLogsParams): string {
     const s = params.service.replace(/"/g, '\\"');
     filters.push(`tostring(resource.attributes['service.name'])=="${s}"`);
   }
+  // NOTE: do NOT wrap severity_number in toreal() here. The otel
+  // dataset stores severity_number as an int; toreal() on an int
+  // column in Cribl KQL returns zero rows instead of coercing — tested
+  // empirically: `toreal(severity_number) >= 9` matches 0 events while
+  // `severity_number >= 9` matches all 18k INFO logs. Compare the raw
+  // int directly.
   if (params.minSeverity != null) {
-    filters.push(`toreal(severity_number) >= ${params.minSeverity}`);
+    filters.push(`severity_number >= ${params.minSeverity}`);
   }
   if (params.maxSeverity != null) {
-    filters.push(`toreal(severity_number) <= ${params.maxSeverity}`);
+    filters.push(`severity_number <= ${params.maxSeverity}`);
   }
   if (params.bodyContains) {
     // Cribl's `contains` is case-insensitive by default on strings.
