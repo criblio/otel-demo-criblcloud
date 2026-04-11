@@ -11,7 +11,8 @@ import {
   listOperationSummaries,
 } from '../api/search';
 import { binSecondsFor } from '../components/timeRanges';
-import { HEALTH_LEGEND } from '../utils/health';
+import { previousWindow } from '../utils/timeRange';
+import { HEALTH_LEGEND, serviceHealth } from '../utils/health';
 import type {
   DependencyEdge,
   ServiceSummary,
@@ -46,6 +47,7 @@ export default function SystemArchPage() {
   const view: ViewMode = viewParam === 'isometric' ? 'isometric' : 'graph';
   const [edges, setEdges] = useState<DependencyEdge[]>([]);
   const [summaries, setSummaries] = useState<ServiceSummary[]>([]);
+  const [prevSummaries, setPrevSummaries] = useState<ServiceSummary[]>([]);
   const [buckets, setBuckets] = useState<ServiceBucket[]>([]);
   const [loadingDeps, setLoadingDeps] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +93,19 @@ export default function SystemArchPage() {
         if (!cancelled) setSummaries([]);
       });
 
+    // Previous-window summaries: feeds the traffic-drop detection
+    // in serviceHealth(). Non-fatal — if this fails we just lose
+    // the drop signal, which is still strictly better than the
+    // pre-existing error-rate-only path.
+    const prev = previousWindow(lookback);
+    listServiceSummaries(prev.earliest, prev.latest)
+      .then((r) => {
+        if (!cancelled) setPrevSummaries(r);
+      })
+      .catch(() => {
+        if (!cancelled) setPrevSummaries([]);
+      });
+
     getServiceTimeSeries(binSeconds, undefined, lookback, 'now')
       .then((r) => {
         if (!cancelled) setBuckets(r);
@@ -130,6 +145,12 @@ export default function SystemArchPage() {
     return m;
   }, [summaries]);
 
+  const prevServicesMap = useMemo(() => {
+    const m = new Map<string, ServiceSummary>();
+    for (const sv of prevSummaries) m.set(sv.service, sv);
+    return m;
+  }, [prevSummaries]);
+
   const bucketsByService = useMemo(() => {
     const m = new Map<string, ServiceBucket[]>();
     for (const b of buckets) {
@@ -148,8 +169,19 @@ export default function SystemArchPage() {
     serviceNames.add(e.child);
   }
 
-  // Count unhealthy services for the toolbar summary
-  const unhealthyCount = summaries.filter((sv) => sv.errorRate > 0).length;
+  // Count unhealthy services for the toolbar summary. Now covers
+  // traffic-drop services too so the count matches what the user
+  // sees visually — a kafka-lag'd service with 0 errors still
+  // counts because its halo will be purple.
+  const unhealthyCount = summaries.filter((sv) => {
+    const h = serviceHealth(sv, prevServicesMap.get(sv.service));
+    return (
+      h.bucket === 'critical' ||
+      h.bucket === 'warn' ||
+      h.bucket === 'watch' ||
+      h.bucket === 'traffic_drop'
+    );
+  }).length;
 
   // Lazy loader passed to each NodeTooltip — fetches per-service
   // operations on hover. Pre-binds the current lookback so the
@@ -204,7 +236,7 @@ export default function SystemArchPage() {
                     />
                   )}
                 </span>
-                {h.bucket}
+                {h.bucket === 'traffic_drop' ? 'traffic drop' : h.bucket}
               </span>
             );
           })}
@@ -222,7 +254,7 @@ export default function SystemArchPage() {
           </span>
           {unhealthyCount > 0 && (
             <span className={s.unhealthy}>
-              {unhealthyCount} with errors
+              {unhealthyCount} needing attention
             </span>
           )}
         </div>
@@ -239,6 +271,7 @@ export default function SystemArchPage() {
           <DependencyGraph
             edges={edges}
             services={servicesMap}
+            prevServices={prevServicesMap}
             bucketsByService={bucketsByService}
             width={dims.w}
             height={dims.h}
@@ -250,6 +283,7 @@ export default function SystemArchPage() {
           <IsometricGraph
             edges={edges}
             services={servicesMap}
+            prevServices={prevServicesMap}
             bucketsByService={bucketsByService}
             width={dims.w}
             height={dims.h}

@@ -94,6 +94,18 @@
   color: var(--cds-color-danger);
 }
 
+.statDelta {
+  font-size: var(--cds-font-size-xs);
+  font-weight: var(--cds-font-weight-medium);
+  color: var(--cds-color-fg-muted);
+}
+
+.statDeltaBad {
+  font-size: var(--cds-font-size-xs);
+  font-weight: var(--cds-font-weight-semibold);
+  color: #a855f7;
+}
+
 .sparkBlock {
   margin-top: var(--cds-space-sm);
 }

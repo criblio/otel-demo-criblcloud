@@ -45,6 +45,11 @@ import type {
 interface Props {
   edges: DependencyEdge[];
   services: Map<string, ServiceSummary>;
+  /** Previous-window summaries, keyed by service name. Enables the
+   * traffic-drop health signal — services whose request rate has
+   * fallen sharply vs baseline are promoted to the `traffic_drop`
+   * bucket in the halo + tooltip. */
+  prevServices?: Map<string, ServiceSummary>;
   bucketsByService: Map<string, ServiceBucket[]>;
   width: number;
   height: number;
@@ -57,6 +62,7 @@ const DRAG_THRESHOLD = 4;
 export default function DependencyGraph({
   edges,
   services,
+  prevServices,
   bucketsByService,
   width,
   height,
@@ -410,7 +416,8 @@ export default function DependencyGraph({
             const x = n.x ?? 0;
             const y = n.y ?? 0;
             const summary = services.get(n.id);
-            const health = serviceHealth(summary);
+            const prevSummary = prevServices?.get(n.id);
+            const health = serviceHealth(summary, prevSummary);
             const isFocused = focusId === n.id;
             const isPinned = pinned === n.id;
             const idColor = serviceColor(n.id);
@@ -419,6 +426,7 @@ export default function DependencyGraph({
             const haloRadius = r + haloGap;
             const haloWidth =
               health.bucket === 'critical' ? 3.5
+              : health.bucket === 'traffic_drop' ? 3
               : health.bucket === 'warn' ? 3
               : health.bucket === 'watch' ? 2
               : health.bucket === 'idle' ? 1
@@ -504,6 +512,7 @@ export default function DependencyGraph({
             <NodeTooltip
               service={focusNode.id}
               summary={services.get(focusNode.id)}
+              prevSummary={prevServices?.get(focusNode.id)}
               buckets={bucketsByService.get(focusNode.id) ?? []}
               pinned={pinned === focusNode.id}
               left={left}

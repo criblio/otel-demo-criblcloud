@@ -26,6 +26,10 @@ import s from './NodeTooltip.module.css';
 interface Props {
   service: string;
   summary: ServiceSummary | undefined;
+  /** Previous-window summary used to detect traffic drops. When
+   * present and significant, the tooltip's health label is promoted
+   * to "Traffic down NN%" and a delta row is shown under Rate. */
+  prevSummary?: ServiceSummary;
   buckets: ServiceBucket[];
   pinned: boolean;
   left: number;
@@ -100,6 +104,7 @@ function fmtUs(us: number): string {
 export default function NodeTooltip({
   service,
   summary,
+  prevSummary,
   buckets,
   pinned,
   left,
@@ -108,7 +113,7 @@ export default function NodeTooltip({
   loadOperations,
   lookback,
 }: Props) {
-  const health = serviceHealth(summary);
+  const health = serviceHealth(summary, prevSummary);
 
   // Lazy-loaded operations breakdown. Cached at the module level so
   // re-hovering the same node is instant; debounced with a small
@@ -249,7 +254,28 @@ export default function NodeTooltip({
             <span className={s.statLabel}>Requests</span>
             <span className={s.statValue}>{summary.requests.toLocaleString()}</span>
             <span className={s.statLabel}>Rate</span>
-            <span className={s.statValue}>{fmtRate(reqPerMin)}</span>
+            <span className={s.statValue}>
+              {fmtRate(reqPerMin)}
+              {prevSummary && prevSummary.requests > 0 && (
+                <span
+                  className={
+                    summary.requests / prevSummary.requests <= 0.5
+                      ? s.statDeltaBad
+                      : s.statDelta
+                  }
+                >
+                  {' '}
+                  {(() => {
+                    const pct = Math.round(
+                      ((summary.requests - prevSummary.requests) /
+                        prevSummary.requests) *
+                        100,
+                    );
+                    return `${pct >= 0 ? '+' : ''}${pct}% vs prior`;
+                  })()}
+                </span>
+              )}
+            </span>
             <span className={s.statLabel}>Errors</span>
             <span
               className={`${s.statValue} ${summary.errorRate > 0 ? s.statValueErr : ''}`}

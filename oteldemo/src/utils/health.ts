@@ -1,14 +1,35 @@
 /**
  * Map a service's recent stats into a health bucket + display color.
  *
- * Buckets are driven off error rate (primary signal). Latency is shown
- * alongside in the tooltip but doesn't affect the color because an
- * always-slow service isn't necessarily unhealthy — it might just be
- * a compute-heavy workload. Errors are more unambiguously bad.
+ * Two independent signals feed the bucket:
+ *
+ *  - Error rate (primary): countif(status=error) / count(). Error-
+ *    rate bucketing stays as-is — watch / warn / critical thresholds
+ *    at 0 / 1% / 5%. Always-slow is not the same as unhealthy (the
+ *    workload may just be compute-heavy), so latency doesn't drive
+ *    color.
+ *  - Traffic-drop: a significant fall in request rate vs the
+ *    immediately-previous window of the same length. Catches the
+ *    class of outages where a service is quietly starving for work
+ *    (upstream kafka lag, stuck consumer, failed job runner) —
+ *    error rate stays at 0, latency is fine, but requests just
+ *    stop arriving. Error rate alone would keep the service green.
+ *
+ * Bucket precedence: if error rate is already at `warn`/`critical`
+ * severity the error bucket wins (an erroring service is still
+ * erroring regardless of volume). Below that, a significant traffic
+ * drop promotes to `traffic_drop` so the signal doesn't get lost
+ * among the green rows.
  */
 import type { ServiceSummary } from '../api/types';
 
-export type HealthBucket = 'healthy' | 'watch' | 'warn' | 'critical' | 'idle';
+export type HealthBucket =
+  | 'healthy'
+  | 'watch'
+  | 'warn'
+  | 'critical'
+  | 'idle'
+  | 'traffic_drop';
 
 export interface HealthInfo {
   bucket: HealthBucket;
@@ -22,6 +43,10 @@ const HEALTH: Record<HealthBucket, { color: string; label: string }> = {
   warn: { color: '#f59e0b', label: 'Warn (1–5% errors)' },
   critical: { color: '#dc2626', label: 'Critical (>5% errors)' },
   idle: { color: '#9ca3af', label: 'No recent traffic' },
+  traffic_drop: {
+    color: '#a855f7',
+    label: 'Traffic drop vs prior window',
+  },
 };
 
 /** Very subtle row-background tint for a health bucket, matched to
@@ -33,6 +58,7 @@ const HEALTH_BG: Record<HealthBucket, string> = {
   warn: 'rgba(245, 158, 11, 0.12)',
   critical: 'rgba(220, 38, 38, 0.12)',
   idle: 'transparent',
+  traffic_drop: 'rgba(168, 85, 247, 0.12)',
 };
 
 export function healthRowBg(bucket: HealthBucket): string {
@@ -44,14 +70,51 @@ export const HEALTH_LEGEND: Array<{ bucket: HealthBucket; color: string; label: 
   { bucket: 'watch', ...HEALTH.watch },
   { bucket: 'warn', ...HEALTH.warn },
   { bucket: 'critical', ...HEALTH.critical },
+  { bucket: 'traffic_drop', ...HEALTH.traffic_drop },
   { bucket: 'idle', ...HEALTH.idle },
 ];
 
-export function serviceHealth(summary: ServiceSummary | undefined): HealthInfo {
+/**
+ * Minimum prior-window request count for the traffic-drop rule to
+ * fire. Tuned to keep late-night troughs and synthetic traffic gaps
+ * from misfiring — with fewer than this many samples in the prior
+ * window, rate ratios are too noisy to trust.
+ */
+export const MIN_BASELINE_REQUESTS = 50;
+
+/** Traffic-drop triggers when the current window has fallen to
+ * this fraction (or below) of the prior window. 50% is the point
+ * where the drop is meaningful enough to flag but large enough
+ * to avoid false positives during routine minute-to-minute jitter. */
+const TRAFFIC_DROP_THRESHOLD = 0.5;
+
+export function serviceHealth(
+  summary: ServiceSummary | undefined,
+  prev?: ServiceSummary,
+): HealthInfo {
   if (!summary || summary.requests === 0) {
     return { bucket: 'idle', ...HEALTH.idle };
   }
-  return healthFromRate(summary.errorRate);
+  const errInfo = healthFromRate(summary.errorRate);
+  // Errors dominate when they're already significant — an erroring
+  // service is still erroring even if the volume also dropped.
+  if (errInfo.bucket === 'critical' || errInfo.bucket === 'warn') {
+    return errInfo;
+  }
+  // Otherwise check the traffic-drop rule. Requires a prior window
+  // with enough samples to trust the ratio.
+  if (prev && prev.requests >= MIN_BASELINE_REQUESTS) {
+    const ratio = summary.requests / prev.requests;
+    if (ratio <= TRAFFIC_DROP_THRESHOLD) {
+      const dropPct = Math.round((1 - ratio) * 100);
+      return {
+        bucket: 'traffic_drop',
+        color: HEALTH.traffic_drop.color,
+        label: `Traffic down ${dropPct}% vs prior window`,
+      };
+    }
+  }
+  return errInfo;
 }
 
 /** Same bucketing logic, usable for anything with an error rate: edges, operations, ... */

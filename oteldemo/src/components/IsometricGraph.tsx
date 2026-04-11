@@ -30,6 +30,8 @@ import type {
 interface Props {
   edges: DependencyEdge[];
   services: Map<string, ServiceSummary>;
+  /** Previous-window summaries — enables the traffic-drop signal. */
+  prevServices?: Map<string, ServiceSummary>;
   bucketsByService: Map<string, ServiceBucket[]>;
   width: number;
   height: number;
@@ -83,6 +85,7 @@ function unprojectPoint(
 export default function IsometricGraph({
   edges,
   services,
+  prevServices,
   bucketsByService,
   width,
   height,
@@ -526,7 +529,8 @@ export default function IsometricGraph({
           {sortedNodes.map((p) => {
             const n = p.node;
             const summary = services.get(n.id);
-            const health = serviceHealth(summary);
+            const prevSummary = prevServices?.get(n.id);
+            const health = serviceHealth(summary, prevSummary);
             const isFocused = focusId === n.id;
             const isPinned = pinned === n.id;
             const idColor = serviceColor(n.id);
@@ -545,6 +549,7 @@ export default function IsometricGraph({
             const haloRy = ry + haloGap * CYL_TOP_RY_RATIO * 2.5;
             const haloWidth =
               health.bucket === 'critical' ? 3.5
+              : health.bucket === 'traffic_drop' ? 3
               : health.bucket === 'warn' ? 3
               : health.bucket === 'watch' ? 2
               : health.bucket === 'idle' ? 1
@@ -661,6 +666,7 @@ export default function IsometricGraph({
             <NodeTooltip
               service={focusNode.id}
               summary={services.get(focusNode.id)}
+              prevSummary={prevServices?.get(focusNode.id)}
               buckets={bucketsByService.get(focusNode.id) ?? []}
               pinned={pinned === focusNode.id}
               left={left}
