@@ -29,8 +29,9 @@
 /* eslint-disable react-hooks/refs */
 import { useMemo, useRef, useState } from 'react';
 import NodeTooltip from './NodeTooltip';
+import EdgeTooltip from './EdgeTooltip';
 import ZoomControls from './ZoomControls';
-import { serviceColor, formatDurationUs } from '../utils/spans';
+import { serviceColor } from '../utils/spans';
 import { serviceHealth, healthFromRate } from '../utils/health';
 import { useForceLayout, type SimNode, type SimLink } from '../hooks/useForceLayout';
 import { usePanZoom } from '../hooks/usePanZoom';
@@ -38,6 +39,7 @@ import type {
   DependencyEdge,
   ServiceSummary,
   ServiceBucket,
+  OperationSummary,
 } from '../api/types';
 
 interface Props {
@@ -46,6 +48,8 @@ interface Props {
   bucketsByService: Map<string, ServiceBucket[]>;
   width: number;
   height: number;
+  loadOperations?: (service: string) => Promise<OperationSummary[]>;
+  lookback: string;
 }
 
 const DRAG_THRESHOLD = 4;
@@ -56,6 +60,8 @@ export default function DependencyGraph({
   bucketsByService,
   width,
   height,
+  loadOperations,
+  lookback,
 }: Props) {
   const {
     transform,
@@ -71,6 +77,23 @@ export default function DependencyGraph({
   } = usePanZoom(width, height);
   const [hovered, setHovered] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
+  // Hovered edge for the EdgeTooltip card. Tracks the full link data
+  // so the card has everything it needs without looking it up again,
+  // plus the current cursor position so the card can follow the
+  // mouse like a traditional tooltip.
+  interface HoveredEdge {
+    key: string;
+    parent: string;
+    child: string;
+    kind: 'rpc' | 'messaging';
+    topic?: string;
+    callCount: number;
+    errorCount: number;
+    p95DurUs: number;
+    cursorX: number;
+    cursorY: number;
+  }
+  const [hoveredEdge, setHoveredEdge] = useState<HoveredEdge | null>(null);
 
   // Drag state — the active pointer session, cleared on release.
   const dragRef = useRef<{
@@ -308,33 +331,75 @@ export default function DependencyGraph({
             // synchronous RPC edges even when the pair of services is
             // the same. Dash pattern scales roughly with line width.
             const dashArray = isMessaging ? '6 4' : undefined;
-            const kindLabel = isMessaging
-              ? `messaging${l.topic ? ` (${l.topic})` : ''}`
-              : 'rpc';
+            const edgeKey = `${l.kind ?? 'rpc'}\u0000${sourceId}\u0000${targetId}`;
+            // A wider, transparent "hit" line lets hover catch thin
+            // edges without the user needing pixel-perfect aim. The
+            // visible styled line sits on top of it.
+            const computedWidth = Math.max(
+              1,
+              Math.log10(l.value + 1) + (hasErrors ? 1 : 0),
+            );
             return (
-              <line
-                key={i}
-                x1={sx}
-                y1={sy}
-                x2={tEndX}
-                y2={tEndY}
-                stroke={stroke}
-                strokeOpacity={
-                  isHighlighted ? 0.95 : focusId ? 0.15 : hasErrors ? 0.8 : 0.45
-                }
-                strokeWidth={Math.max(
-                  1,
-                  Math.log10(l.value + 1) + (hasErrors ? 1 : 0),
-                )}
-                strokeDasharray={dashArray}
-                markerEnd={
-                  isHighlighted ? 'url(#arrowheadActive)' : 'url(#arrowhead)'
-                }
-              >
-                <title>
-                  {`${sourceId} → ${targetId}  [${kindLabel}]\n${l.value.toLocaleString()} calls, ${l.errorCount.toLocaleString()} errors (${((l.value > 0 ? l.errorCount / l.value : 0) * 100).toFixed(2)}%)\np95 ${formatDurationUs(l.p95DurUs)}`}
-                </title>
-              </line>
+              <g key={i}>
+                <line
+                  x1={sx}
+                  y1={sy}
+                  x2={tEndX}
+                  y2={tEndY}
+                  stroke="transparent"
+                  strokeWidth={Math.max(computedWidth + 8, 10)}
+                  onMouseEnter={(e) => {
+                    const rect = svgRef.current?.getBoundingClientRect();
+                    setHoveredEdge({
+                      key: edgeKey,
+                      parent: sourceId,
+                      child: targetId,
+                      kind: (l.kind ?? 'rpc') as 'rpc' | 'messaging',
+                      topic: l.topic,
+                      callCount: l.value,
+                      errorCount: l.errorCount,
+                      p95DurUs: l.p95DurUs,
+                      cursorX: rect ? e.clientX - rect.left : 0,
+                      cursorY: rect ? e.clientY - rect.top : 0,
+                    });
+                  }}
+                  onMouseMove={(e) => {
+                    const rect = svgRef.current?.getBoundingClientRect();
+                    if (!rect) return;
+                    setHoveredEdge((prev) =>
+                      prev && prev.key === edgeKey
+                        ? {
+                            ...prev,
+                            cursorX: e.clientX - rect.left,
+                            cursorY: e.clientY - rect.top,
+                          }
+                        : prev,
+                    );
+                  }}
+                  onMouseLeave={() => {
+                    setHoveredEdge((prev) =>
+                      prev && prev.key === edgeKey ? null : prev,
+                    );
+                  }}
+                  style={{ cursor: 'help' }}
+                />
+                <line
+                  x1={sx}
+                  y1={sy}
+                  x2={tEndX}
+                  y2={tEndY}
+                  stroke={stroke}
+                  strokeOpacity={
+                    isHighlighted ? 0.95 : focusId ? 0.15 : hasErrors ? 0.8 : 0.45
+                  }
+                  strokeWidth={computedWidth}
+                  strokeDasharray={dashArray}
+                  markerEnd={
+                    isHighlighted ? 'url(#arrowheadActive)' : 'url(#arrowhead)'
+                  }
+                  style={{ pointerEvents: 'none' }}
+                />
+              </g>
             );
           })}
         </g>
@@ -444,9 +509,30 @@ export default function DependencyGraph({
               left={left}
               top={top}
               onClose={() => setPinned(null)}
+              loadOperations={loadOperations}
+              lookback={lookback}
             />
           );
         })()}
+
+      {/* Edge tooltip follows the cursor while an edge is hovered.
+       * Suppressed when a node tooltip is already pinned/focused to
+       * avoid two floating cards competing for attention. */}
+      {hoveredEdge && !focusNode && (
+        <EdgeTooltip
+          parent={hoveredEdge.parent}
+          child={hoveredEdge.child}
+          kind={hoveredEdge.kind}
+          topic={hoveredEdge.topic}
+          callCount={hoveredEdge.callCount}
+          errorCount={hoveredEdge.errorCount}
+          p95DurUs={hoveredEdge.p95DurUs}
+          left={hoveredEdge.cursorX}
+          top={hoveredEdge.cursorY}
+          containerWidth={width}
+          containerHeight={height}
+        />
+      )}
     </div>
   );
 }

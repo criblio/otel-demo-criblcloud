@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useRangeParam } from '../hooks/useRangeParam';
 import DependencyGraph from '../components/DependencyGraph';
@@ -8,6 +8,7 @@ import {
   getDependencies,
   listServiceSummaries,
   getServiceTimeSeries,
+  listOperationSummaries,
 } from '../api/search';
 import { binSecondsFor } from '../components/timeRanges';
 import { HEALTH_LEGEND } from '../utils/health';
@@ -150,6 +151,16 @@ export default function SystemArchPage() {
   // Count unhealthy services for the toolbar summary
   const unhealthyCount = summaries.filter((sv) => sv.errorRate > 0).length;
 
+  // Lazy loader passed to each NodeTooltip — fetches per-service
+  // operations on hover. Pre-binds the current lookback so the
+  // tooltip component doesn't need to know about time windows, and
+  // its identity changes whenever the range does so the tooltip
+  // cache keys stay consistent.
+  const loadOperations = useCallback(
+    (svc: string) => listOperationSummaries(svc, lookback, 'now'),
+    [lookback],
+  );
+
   return (
     <div className={s.page}>
       <div className={s.toolbar}>
@@ -231,6 +242,8 @@ export default function SystemArchPage() {
             bucketsByService={bucketsByService}
             width={dims.w}
             height={dims.h}
+            loadOperations={loadOperations}
+            lookback={lookback}
           />
         )}
         {!loadingDeps && edges.length > 0 && view === 'isometric' && (
@@ -240,6 +253,8 @@ export default function SystemArchPage() {
             bucketsByService={bucketsByService}
             width={dims.w}
             height={dims.h}
+            loadOperations={loadOperations}
+            lookback={lookback}
           />
         )}
       </div>

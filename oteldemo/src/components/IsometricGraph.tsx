@@ -14,8 +14,9 @@
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import NodeTooltip from './NodeTooltip';
+import EdgeTooltip from './EdgeTooltip';
 import ZoomControls from './ZoomControls';
-import { serviceColor, serviceColorAtLightness, formatDurationUs } from '../utils/spans';
+import { serviceColor, serviceColorAtLightness } from '../utils/spans';
 import { serviceHealth, healthFromRate } from '../utils/health';
 import { useForceLayout, type SimNode, type SimLink } from '../hooks/useForceLayout';
 import { usePanZoom } from '../hooks/usePanZoom';
@@ -23,6 +24,7 @@ import type {
   DependencyEdge,
   ServiceSummary,
   ServiceBucket,
+  OperationSummary,
 } from '../api/types';
 
 interface Props {
@@ -31,6 +33,8 @@ interface Props {
   bucketsByService: Map<string, ServiceBucket[]>;
   width: number;
   height: number;
+  loadOperations?: (service: string) => Promise<OperationSummary[]>;
+  lookback: string;
 }
 
 const DRAG_THRESHOLD = 4;
@@ -82,6 +86,8 @@ export default function IsometricGraph({
   bucketsByService,
   width,
   height,
+  loadOperations,
+  lookback,
 }: Props) {
   const {
     transform,
@@ -97,6 +103,22 @@ export default function IsometricGraph({
   } = usePanZoom(width, height);
   const [hovered, setHovered] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
+  // Hovered edge for the EdgeTooltip card. Mirrors the 2D view —
+  // tracks the link data plus the current cursor position so the
+  // card can follow the mouse.
+  interface HoveredEdge {
+    key: string;
+    parent: string;
+    child: string;
+    kind: 'rpc' | 'messaging';
+    topic?: string;
+    callCount: number;
+    errorCount: number;
+    p95DurUs: number;
+    cursorX: number;
+    cursorY: number;
+  }
+  const [hoveredEdge, setHoveredEdge] = useState<HoveredEdge | null>(null);
 
   const dragRef = useRef<{
     id: string;
@@ -428,33 +450,72 @@ export default function IsometricGraph({
             const stroke = isHighlighted ? '#0190ff' : baseStroke;
             const isMessaging = l.kind === 'messaging';
             const dashArray = isMessaging ? '6 4' : undefined;
-            const kindLabel = isMessaging
-              ? `messaging${l.topic ? ` (${l.topic})` : ''}`
-              : 'rpc';
+            const edgeKey = `${l.kind ?? 'rpc'}\u0000${srcId}\u0000${tgtId}`;
+            const computedWidth = Math.max(
+              1,
+              Math.log10(l.value + 1) + (hasErrors ? 1 : 0),
+            );
             return (
-              <line
-                key={i}
-                x1={sx}
-                y1={sy}
-                x2={tEndX}
-                y2={tEndY}
-                stroke={stroke}
-                strokeOpacity={
-                  isHighlighted ? 0.95 : focusId ? 0.15 : hasErrors ? 0.85 : 0.55
-                }
-                strokeWidth={Math.max(
-                  1,
-                  Math.log10(l.value + 1) + (hasErrors ? 1 : 0),
-                )}
-                strokeDasharray={dashArray}
-                markerEnd={
-                  isHighlighted ? 'url(#isoArrowActive)' : 'url(#isoArrow)'
-                }
-              >
-                <title>
-                  {`${srcId} → ${tgtId}  [${kindLabel}]\n${l.value.toLocaleString()} calls, ${l.errorCount.toLocaleString()} errors (${((l.value > 0 ? l.errorCount / l.value : 0) * 100).toFixed(2)}%)\np95 ${formatDurationUs(l.p95DurUs)}`}
-                </title>
-              </line>
+              <g key={i}>
+                <line
+                  x1={sx}
+                  y1={sy}
+                  x2={tEndX}
+                  y2={tEndY}
+                  stroke="transparent"
+                  strokeWidth={Math.max(computedWidth + 8, 10)}
+                  onMouseEnter={(e) => {
+                    const rect = svgRef.current?.getBoundingClientRect();
+                    setHoveredEdge({
+                      key: edgeKey,
+                      parent: srcId,
+                      child: tgtId,
+                      kind: (l.kind ?? 'rpc') as 'rpc' | 'messaging',
+                      topic: l.topic,
+                      callCount: l.value,
+                      errorCount: l.errorCount,
+                      p95DurUs: l.p95DurUs,
+                      cursorX: rect ? e.clientX - rect.left : 0,
+                      cursorY: rect ? e.clientY - rect.top : 0,
+                    });
+                  }}
+                  onMouseMove={(e) => {
+                    const rect = svgRef.current?.getBoundingClientRect();
+                    if (!rect) return;
+                    setHoveredEdge((prev) =>
+                      prev && prev.key === edgeKey
+                        ? {
+                            ...prev,
+                            cursorX: e.clientX - rect.left,
+                            cursorY: e.clientY - rect.top,
+                          }
+                        : prev,
+                    );
+                  }}
+                  onMouseLeave={() => {
+                    setHoveredEdge((prev) =>
+                      prev && prev.key === edgeKey ? null : prev,
+                    );
+                  }}
+                  style={{ cursor: 'help' }}
+                />
+                <line
+                  x1={sx}
+                  y1={sy}
+                  x2={tEndX}
+                  y2={tEndY}
+                  stroke={stroke}
+                  strokeOpacity={
+                    isHighlighted ? 0.95 : focusId ? 0.15 : hasErrors ? 0.85 : 0.55
+                  }
+                  strokeWidth={computedWidth}
+                  strokeDasharray={dashArray}
+                  markerEnd={
+                    isHighlighted ? 'url(#isoArrowActive)' : 'url(#isoArrow)'
+                  }
+                  style={{ pointerEvents: 'none' }}
+                />
+              </g>
             );
           })}
         </g>
@@ -605,9 +666,29 @@ export default function IsometricGraph({
               left={left}
               top={top}
               onClose={() => setPinned(null)}
+              loadOperations={loadOperations}
+              lookback={lookback}
             />
           );
         })()}
+
+      {/* Edge tooltip follows the cursor while an edge is hovered.
+       * Suppressed when a node tooltip is already active. */}
+      {hoveredEdge && !focusNode && (
+        <EdgeTooltip
+          parent={hoveredEdge.parent}
+          child={hoveredEdge.child}
+          kind={hoveredEdge.kind}
+          topic={hoveredEdge.topic}
+          callCount={hoveredEdge.callCount}
+          errorCount={hoveredEdge.errorCount}
+          p95DurUs={hoveredEdge.p95DurUs}
+          left={hoveredEdge.cursorX}
+          top={hoveredEdge.cursorY}
+          containerWidth={width}
+          containerHeight={height}
+        />
+      )}
     </div>
   );
 }

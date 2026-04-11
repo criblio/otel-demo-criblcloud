@@ -153,3 +153,64 @@
   text-align: center;
   padding: var(--cds-space-sm) 0;
 }
+
+/* Lazy-loaded operation breakdown sections. Kept compact so the
+ * tooltip doesn't balloon past ~400px tall when a service has both
+ * top calls AND erroring calls populated. */
+.opsSection {
+  margin-top: var(--cds-space-sm);
+  padding-top: var(--cds-space-sm);
+  border-top: 1px solid var(--cds-color-border-subtle);
+}
+.opsHeader {
+  font-size: var(--cds-font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--cds-color-fg-muted);
+  font-weight: var(--cds-font-weight-semibold);
+  margin-bottom: var(--cds-space-xs);
+}
+.opsHeaderErr {
+  color: var(--cds-color-danger);
+}
+.opsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.opsRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cds-space-sm);
+  padding: 2px 0;
+  font-size: var(--cds-font-size-xs);
+  font-family: var(--cds-font-mono);
+}
+.opsName {
+  color: var(--cds-color-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.opsCount {
+  color: var(--cds-color-fg-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  font-weight: var(--cds-font-weight-semibold);
+}
+.opsCountErr {
+  color: var(--cds-color-danger);
+}
+.opsLoading,
+.opsEmpty {
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-subtle);
+  font-style: italic;
+}
+.opsError {
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-danger);
+}

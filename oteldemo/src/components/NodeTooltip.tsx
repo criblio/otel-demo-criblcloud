@@ -2,11 +2,25 @@
  * Floating stat card rendered on top of the dependency graph when the
  * user hovers or pins a service node. Shares layout with the Home
  * catalog row + Service detail hero but in a compact, positioned form.
+ *
+ * Lazy-loaded details: in addition to the aggregate stats + sparklines
+ * that SystemArchPage pre-fetches for every service, this component
+ * fetches per-service operation breakdowns (top calls + erroring ops)
+ * on-demand when the tooltip opens. Fetches are debounced by 150 ms
+ * so quick mouse sweeps across the graph don't spam the backend, and
+ * results are cached in a module-level Map keyed by (service, lookback)
+ * so repeated hovers on the same node are instant. The cache is capped
+ * by an LRU-ish length check to bound memory on long sessions.
  */
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Sparkline from './Sparkline';
 import { serviceHealth } from '../utils/health';
-import type { ServiceSummary, ServiceBucket } from '../api/types';
+import type {
+  ServiceSummary,
+  ServiceBucket,
+  OperationSummary,
+} from '../api/types';
 import s from './NodeTooltip.module.css';
 
 interface Props {
@@ -17,7 +31,58 @@ interface Props {
   left: number;
   top: number;
   onClose: () => void;
+  /**
+   * Callback to load per-service operation summaries. The parent
+   * pre-binds the current lookback range so the tooltip doesn't need
+   * to know about time windows. Returning an empty array is fine and
+   * renders "no operations".
+   */
+  loadOperations?: (service: string) => Promise<OperationSummary[]>;
+  /**
+   * The current lookback (e.g. "-15m"). Used only as a cache key —
+   * when the user changes the range, the cache key changes and the
+   * tooltip re-fetches on next hover.
+   */
+  lookback: string;
 }
+
+/** Shared across all NodeTooltip instances — a tooltip mount for the
+ * same service+lookback uses the cached result instead of refetching. */
+interface CacheEntry {
+  ops: OperationSummary[] | null;
+  error: string | null;
+  loading: boolean;
+  /** Promise for in-flight loads so multiple mounts await the same fetch. */
+  inflight?: Promise<void>;
+}
+const opsCache = new Map<string, CacheEntry>();
+const CACHE_LIMIT = 64;
+
+function cacheKey(service: string, lookback: string): string {
+  return `${service}\u0000${lookback}`;
+}
+
+/** Drop the oldest entries until we're under the cap. Map iteration
+ * order is insertion order so the first N are the oldest. */
+function trimCache() {
+  if (opsCache.size <= CACHE_LIMIT) return;
+  const excess = opsCache.size - CACHE_LIMIT;
+  let i = 0;
+  for (const key of opsCache.keys()) {
+    if (i >= excess) break;
+    opsCache.delete(key);
+    i++;
+  }
+}
+
+/** How many rows to show in each of the two sections. */
+const TOP_CALLS_LIMIT = 5;
+const TOP_ERROR_LIMIT = 3;
+/** Delay before firing the fetch. Cancelled on unmount so a quick
+ * mouseover → mouseout doesn't kick off a query. Kept very small so
+ * the tooltip feels responsive; a hover that lasts ≥50ms is almost
+ * certainly intentional. */
+const FETCH_DELAY_MS = 50;
 
 function fmtRate(perMin: number): string {
   if (perMin >= 1000) return `${(perMin / 1000).toFixed(1)}k/min`;
@@ -40,8 +105,101 @@ export default function NodeTooltip({
   left,
   top,
   onClose,
+  loadOperations,
+  lookback,
 }: Props) {
   const health = serviceHealth(summary);
+
+  // Lazy-loaded operations breakdown. Cached at the module level so
+  // re-hovering the same node is instant; debounced with a small
+  // delay so quick mouse sweeps across the graph don't fire.
+  const key = cacheKey(service, lookback);
+  const [ops, setOps] = useState<OperationSummary[] | null>(
+    () => opsCache.get(key)?.ops ?? null,
+  );
+  const [loading, setLoading] = useState<boolean>(
+    () => !opsCache.has(key),
+  );
+  const [loadErr, setLoadErr] = useState<string | null>(
+    () => opsCache.get(key)?.error ?? null,
+  );
+
+  useEffect(() => {
+    if (!loadOperations) {
+      setLoading(false);
+      return;
+    }
+    const entry = opsCache.get(key);
+    if (entry && !entry.loading) {
+      // Already resolved in cache — use it directly.
+      setOps(entry.ops);
+      setLoadErr(entry.error);
+      setLoading(false);
+      return;
+    }
+    if (entry?.inflight) {
+      // Another tooltip mount already kicked off the fetch; await it.
+      setLoading(true);
+      let cancelled = false;
+      entry.inflight.then(() => {
+        if (cancelled) return;
+        const e2 = opsCache.get(key);
+        setOps(e2?.ops ?? null);
+        setLoadErr(e2?.error ?? null);
+        setLoading(false);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    // No cached entry — schedule a delayed fetch.
+    setLoading(true);
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const promise = loadOperations(service)
+        .then((result) => {
+          opsCache.set(key, { ops: result, error: null, loading: false });
+          trimCache();
+          if (!cancelled) {
+            setOps(result);
+            setLoadErr(null);
+            setLoading(false);
+          }
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          opsCache.set(key, { ops: null, error: msg, loading: false });
+          trimCache();
+          if (!cancelled) {
+            setOps(null);
+            setLoadErr(msg);
+            setLoading(false);
+          }
+        });
+      opsCache.set(key, {
+        ops: null,
+        error: null,
+        loading: true,
+        inflight: promise,
+      });
+    }, FETCH_DELAY_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [key, service, loadOperations]);
+
+  // Partition the loaded operations into "top calls" (by volume) and
+  // "erroring calls" (any with errorRate > 0, sorted by error count).
+  const topCalls = ops ? ops.slice(0, TOP_CALLS_LIMIT) : [];
+  const erroringCalls = ops
+    ? ops
+        .filter((op) => op.errors > 0)
+        .sort((a, b) => b.errors - a.errors || b.errorRate - a.errorRate)
+        .slice(0, TOP_ERROR_LIMIT)
+    : [];
 
   // Compute req/min assuming buckets cover the full window
   let reqPerMin = 0;
@@ -157,6 +315,55 @@ export default function NodeTooltip({
                   ariaLabel={`${service} error rate sparkline`}
                 />
               </div>
+            </div>
+          )}
+
+          {/* Lazy-loaded operation breakdown. Renders nothing until
+           * data arrives; shows a skeleton line while loading so the
+           * tooltip doesn't jump in height when the fetch lands. */}
+          {loadOperations && (
+            <div className={s.opsSection}>
+              <div className={s.opsHeader}>Top API calls</div>
+              {loading && <div className={s.opsLoading}>Loading…</div>}
+              {loadErr && <div className={s.opsError}>{loadErr}</div>}
+              {!loading && !loadErr && topCalls.length === 0 && (
+                <div className={s.opsEmpty}>No operations recorded.</div>
+              )}
+              {!loading && !loadErr && topCalls.length > 0 && (
+                <ul className={s.opsList}>
+                  {topCalls.map((op) => (
+                    <li key={op.operation} className={s.opsRow}>
+                      <span className={s.opsName} title={op.operation}>
+                        {op.operation}
+                      </span>
+                      <span className={s.opsCount}>
+                        {op.requests.toLocaleString()}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {loadOperations && erroringCalls.length > 0 && (
+            <div className={s.opsSection}>
+              <div className={`${s.opsHeader} ${s.opsHeaderErr}`}>
+                Erroring calls
+              </div>
+              <ul className={s.opsList}>
+                {erroringCalls.map((op) => (
+                  <li key={op.operation} className={s.opsRow}>
+                    <span className={s.opsName} title={op.operation}>
+                      {op.operation}
+                    </span>
+                    <span className={`${s.opsCount} ${s.opsCountErr}`}>
+                      {op.errors.toLocaleString()} ·{' '}
+                      {(op.errorRate * 100).toFixed(1)}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </>
