@@ -165,6 +165,37 @@ export interface TraceLogEntry {
   attributes: Record<string, unknown>;
 }
 
+/**
+ * One metric name entry from the Metrics explorer picker. `samples`
+ * is the raw record count in the current window — bigger = more
+ * frequently-reported metric. `services` is the number of distinct
+ * services emitting it, useful for ranking "everywhere" metrics like
+ * system.cpu.time above service-specific ones.
+ */
+export interface MetricSummary {
+  name: string;
+  samples: number;
+  services: number;
+}
+
+/** A single point on a metric time series. Ms since epoch, numeric value. */
+export interface MetricPoint {
+  t: number;
+  v: number;
+}
+
+/**
+ * A named metric series — typically the result of one
+ * `getMetricSeries` call. Holds the metric name, the display
+ * aggregation, and the points. Multiple series can be plotted
+ * together by the caller when splitting by dimension.
+ */
+export interface MetricSeries {
+  metric: string;
+  agg: 'avg' | 'sum' | 'min' | 'max' | 'count';
+  points: MetricPoint[];
+}
+
 /** OTel span kind numeric values. */
 export const SpanKind: Record<number, string> = {
   0: 'UNSPECIFIED',

@@ -8,6 +8,7 @@ import ComparePage from './routes/ComparePage';
 import SystemArchPage from './routes/SystemArchPage';
 import ServiceDetailPage from './routes/ServiceDetailPage';
 import LogsPage from './routes/LogsPage';
+import MetricsPage from './routes/MetricsPage';
 import SettingsPage from './routes/SettingsPage';
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/architecture" element={<SystemArchPage />} />
             <Route path="/service/:serviceName" element={<ServiceDetailPage />} />
             <Route path="/logs" element={<LogsPage />} />
+            <Route path="/metrics" element={<MetricsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
         </Routes>

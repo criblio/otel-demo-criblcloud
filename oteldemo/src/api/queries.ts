@@ -24,6 +24,23 @@ function spansBase(): string {
   return `${datasetClause()} | where isnotnull(end_time_unix_nano)`;
 }
 
+/**
+ * Metrics base: Cribl tags OTel metric records with
+ * `datatype == "generic_metrics"`. That's the cleanest single filter
+ * to separate them from spans and logs in the same dataset. Metric
+ * records have a flat shape:
+ *   - `_metric` — metric name
+ *   - `_value` — numeric value (mean for histograms, latest for gauges,
+ *     cumulative for counters)
+ *   - `_time` — timestamp
+ *   - `['service.name']` / `['host.name']` / ... — resource attributes
+ *     at the TOP LEVEL, not nested under resource.attributes like
+ *     spans and logs. Use the bracket-quoted syntax to access them.
+ */
+function metricsBase(): string {
+  return `${datasetClause()} | where datatype == "generic_metrics"`;
+}
+
 
 /** All distinct service names. */
 export function services(): string {
@@ -475,4 +492,92 @@ export function dependencies(): string {
                 p95DurUs=percentile(dur_us, 95)
       by parent=psvc, child=svc
     | sort by callCount desc`;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Metrics queries — see metricsBase() for the schema overview.
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * List every distinct metric name in the window along with a sample
+ * count and the number of services that emit it. Drives the metric
+ * picker autocomplete on the Metrics tab — users see "here are the
+ * metrics, these are the volumes, these are the services" before
+ * they commit to a chart.
+ */
+export function listMetricNames(): string {
+  return `${metricsBase()}
+    | extend svc=tostring(['service.name'])
+    | summarize samples=count(), services=dcount(svc) by name=_metric
+    | sort by samples desc
+    | limit 500`;
+}
+
+/**
+ * Distinct services that emit a given metric in the window. Populates
+ * the "Service" filter dropdown on the Metrics tab — scoped to what
+ * actually has data, rather than the global service list which
+ * includes services that don't emit this particular metric.
+ */
+export function metricServices(metricName: string): string {
+  const m = metricName.replace(/"/g, '\\"');
+  return `${metricsBase()}
+    | where _metric == "${m}"
+    | extend svc=tostring(['service.name'])
+    | where isnotempty(svc)
+    | summarize by svc
+    | sort by svc asc`;
+}
+
+export interface MetricSeriesParams {
+  metric: string;
+  /** Optional exact service.name filter. */
+  service?: string;
+  /** Bucket width in seconds for the time bucket. */
+  binSeconds: number;
+  /** Aggregation function to apply over the bucketed values. */
+  agg: 'avg' | 'sum' | 'min' | 'max' | 'count';
+}
+
+/**
+ * Time-bucketed metric series. Groups by `bin(_time, Ns)` and applies
+ * the chosen aggregation over `_value`. The result is a list of
+ * `{bucket, val}` pairs sorted by bucket ascending, ready to drop
+ * into the existing LineChart component as a LineSeries.
+ *
+ * A few notes on semantics:
+ *
+ *  - For gauges (e.g. `k8s.container.memory_request`) `avg` over the
+ *    bucket gives the expected "value at that time" since gauges are
+ *    sampled periodically.
+ *  - For histograms (e.g. `rpc.client.duration`) `_value` is the
+ *    pre-computed mean across the collector's export interval, so
+ *    `avg(_value)` is a mean-of-means — close enough for the overview
+ *    but not a true percentile. Real percentiles would require
+ *    parsing the cumulative bucket map, which is a v2 enhancement.
+ *  - For counters (e.g. `traces.span.metrics.calls`) `_value` is
+ *    cumulative and monotonic, so `avg` trends upward over time.
+ *    `max(_value)` per bucket gives the latest cumulative count in
+ *    that bucket; the rate is then the per-bucket delta, which we
+ *    compute client-side in search.ts. A `count(...)` agg returns
+ *    the number of raw metric records, useful for sampling overview.
+ */
+export function metricTimeSeries(params: MetricSeriesParams): string {
+  const m = params.metric.replace(/"/g, '\\"');
+  const svcFilter = params.service
+    ? `| where svc == "${params.service.replace(/"/g, '\\"')}"`
+    : '';
+  // Aggregation function must match the KQL name exactly — map our
+  // 'count' alias to `count()` since it takes no column argument.
+  const aggExpr =
+    params.agg === 'count'
+      ? 'count()'
+      : `${params.agg}(toreal(_value))`;
+  return `${metricsBase()}
+    | where _metric == "${m}"
+    | extend svc=tostring(['service.name'])
+    ${svcFilter}
+    | summarize val=${aggExpr}
+      by bucket=bin(_time, ${params.binSeconds}s)
+    | sort by bucket asc`;
 }

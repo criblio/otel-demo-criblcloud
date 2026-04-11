@@ -16,6 +16,8 @@ import type {
   TraceLogEntry,
   SlowTraceClass,
   ErrorClass,
+  MetricSummary,
+  MetricSeries,
 } from './types';
 
 export async function listServices(earliest = '-1h'): Promise<string[]> {
@@ -408,4 +410,58 @@ export async function getTraceLogs(
     codeLine: r.code_line != null ? toNum(r.code_line) : undefined,
     attributes: toObject(r.attributes),
   }));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Metrics verbs
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * List all metric names in the current window. The picker on the
+ * Metrics tab feeds from this, sorted by raw sample volume (most
+ * frequently-reported metric first).
+ */
+export async function listMetrics(
+  earliest = '-1h',
+  latest = 'now',
+): Promise<MetricSummary[]> {
+  const rows = await runQuery(Q.listMetricNames(), earliest, latest, 500);
+  return rows
+    .map((r) => ({
+      name: String(r.name ?? ''),
+      samples: toNum(r.samples),
+      services: toNum(r.services),
+    }))
+    .filter((m) => m.name);
+}
+
+/** Services that emit a given metric in the current window. */
+export async function listMetricServices(
+  metric: string,
+  earliest = '-1h',
+  latest = 'now',
+): Promise<string[]> {
+  if (!metric) return [];
+  const rows = await runQuery(Q.metricServices(metric), earliest, latest, 500);
+  return rows.map((r) => String(r.svc)).filter(Boolean);
+}
+
+/**
+ * Fetch a time-bucketed metric series. The caller picks the metric
+ * name, optional service filter, aggregation function, and bin width;
+ * we return {metric, agg, points[]}.
+ */
+export async function getMetricSeries(
+  params: Q.MetricSeriesParams,
+  earliest = '-1h',
+  latest = 'now',
+): Promise<MetricSeries> {
+  const rows = await runQuery(Q.metricTimeSeries(params), earliest, latest, 5000);
+  const points = rows
+    .map((r) => ({
+      t: toNum(r.bucket) * 1000,
+      v: toNum(r.val),
+    }))
+    .sort((a, b) => a.t - b.t);
+  return { metric: params.metric, agg: params.agg, points };
 }

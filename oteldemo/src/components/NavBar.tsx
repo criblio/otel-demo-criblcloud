@@ -6,6 +6,7 @@ const tabs = [
   { label: 'Home', to: '/', end: true },
   { label: 'Search', to: '/search' },
   { label: 'Logs', to: '/logs' },
+  { label: 'Metrics', to: '/metrics' },
   { label: 'Compare', to: '/compare' },
   { label: 'System Architecture', to: '/architecture' },
 ];
