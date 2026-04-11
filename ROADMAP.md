@@ -101,37 +101,82 @@ for SLOs: a scheduled search that tracks error budget over a rolling
 
 #### 2a. Research tasks (do these first — they determine the shape)
 
-- **Saved search provisioning API.** What Cribl Search REST endpoints
-  exist for creating / updating / deleting saved searches? What's the
-  auth context inside a Cribl App sandbox iframe — can the app make
-  authenticated calls to the control-plane API the same way it makes
-  KV calls, or is there a separate endpoint? Document the schema of a
-  saved search definition (query, schedule expression, output target).
-- **Scheduled-search execution model.** How does Cribl execute a
-  scheduled search? Where do the results land — in a dedicated
-  dataset, a KV key, an event table, something like Splunk's
-  `$vt_results$` summary indexing? How long are results retained?
-- **Result persistence target.** Three candidates worth comparing:
-  1. **Pack-scoped KV store** — cheapest, already in use for app
-     settings. Writable from both the app and presumably from a
-     scheduled search's output stage. Best for small results (a few
-     hundred baseline rows).
-  2. **Cribl lookups** — named tabular references that any KQL query
-     can join against. Best if baselines need to be queryable from
-     other saved searches.
-  3. **Dedicated `otel_baselines` dataset** — if Cribl Search supports
-     a scheduled search writing to a separate dataset, this scales
-     best and stays queryable without app mediation.
-- **Install-time hook on the Cribl App Platform.** Does the platform
-  support a "run this script when the pack is installed" hook (like a
-  Kubernetes operator or a Helm `post-install` job)? If yes, document
-  it and use it. If no, flag that as a **platform request** to the
-  Cribl team and design a first-run workflow instead.
-- **Idempotency + upgrade path.** How do we name provisioned searches
-  so we can find and update them on subsequent installs without
-  stomping user edits? Tag-based naming (`traceexplorer:baseline:op`)
-  feels right. How do we handle schema migrations when a new app
-  version needs a different baseline shape?
+Detailed findings from the first research pass live in
+[`docs/research/cribl-saved-searches.md`](docs/research/cribl-saved-searches.md).
+Status of each question below is **RESOLVED** / **PARTIAL** /
+**OPEN**.
+
+- ✅ **RESOLVED — Saved search provisioning API.** Cribl Search
+  exposes `/api/v1/m/default_search/search/saved` (list, create),
+  `/search/saved/:id` (get, patch, delete),
+  `/search/saved/:id/notifications` (create notification),
+  `/search/saved/:id/notifications/:nid` (patch, delete). Full
+  schema captured from live examples including `schedule`, `cron`,
+  `keepLastN`, and nested `notifications.items[]` with
+  `triggerType/triggerComparator/triggerCount` + `targets` +
+  message templating. **One API covers saved searches AND
+  scheduled searches AND alerts** — there is no separate alert
+  system. **No TypeScript SDK for Cribl Search saved searches**
+  exists yet; the official `cribl-control-plane` and
+  `cribl-mgmt-plane` SDKs are Stream/Workspace-focused.
+- ✅ **RESOLVED — Auth context inside the pack iframe.** The
+  platform fetch proxy injects the user's Auth0 Bearer JWT
+  automatically on any call to `CRIBL_API_URL`. Same mechanism
+  we already use for `/search/jobs` → works unchanged for
+  `/search/saved/*`. No new auth plumbing needed.
+- 🟡 **PARTIAL — Scheduled-search result persistence + `$vt_*`.**
+  We observed `cribl dataset="$vt_dummy"` in a live saved search,
+  confirming `$vt_*` virtual tables exist. `/search/datasets`
+  does NOT list them, so they're ephemeral / virtual. Hypothesis:
+  a scheduled search's output auto-materializes to `$vt_<id>`,
+  queryable from subsequent queries. **Needs confirmation** —
+  prototype by provisioning a scheduled search via direct REST
+  POST, waiting for a run, and inspecting whether
+  `$vt_<savedQueryId>` becomes queryable. Alternative paths if
+  `$vt_` is a dead end: Cribl lookups (`lookup` keyword is used
+  in existing searches, so they exist and are joinable) or
+  pack-scoped KV writes from a polling client.
+- 🟡 **PARTIAL — `/search/saved/:id/results` endpoint.** The JS
+  bundle's `getResults(id)` constructs
+  `/search/saved/${id}/results`, but a direct GET returned 404
+  for `tailscale_offline` (which has `schedule.enabled=true`).
+  Either the endpoint requires a different prefix, or results
+  only persist when a run produced non-empty output (and this
+  alert is firing on an empty result set). **Needs a test
+  provisioned scheduled search that we know will produce output.**
+- 🟡 **PARTIAL — Install-time hook on the App Platform.**
+  `oteldemo/AGENTS.md` does not mention one. Pending a definitive
+  answer from the Cribl team, assume **no hook exists** and
+  design around a first-run provisioning dialog (§2e below).
+  This is a natural platform feature request to file regardless.
+- **OPEN — Idempotent naming + upgrade path.** Proposal on the
+  table: prefix all app-managed IDs with `traceexplorer__` so
+  the pack can `GET /search/saved?prefix=traceexplorer__` (if the
+  list endpoint supports filtering — unconfirmed), diff against
+  the expected set, and upsert / delete stale rows. Upgrade
+  schema migrations would bump a `traceexplorer_version` row in
+  the pack-scoped KV store and run one-time migrations keyed
+  off it. Never touch rows whose ID doesn't match our prefix.
+- **OPEN — Notification targets.** The `tailscale_offline` saved
+  search references `targets: ["typhoon_ntfy"]`, but calling
+  `/notifications/targets` returned 0 items. The targets live at
+  some path we haven't found yet — possibly
+  `/search/notification-targets`, `/notifications/channels`, or
+  under a product-scoped prefix. Must resolve before §2c (user
+  alerts) because creating an alert requires selecting a target.
+
+**Next concrete research steps** (for the follow-up session):
+
+1. Capture a live POST body by driving the Save-As flow in the
+   UI and watching the network tab. Automation got close but the
+   Save button label varies by page; try a DOM-targeted click
+   instead of text-based.
+2. Write a `scripts/probe-saved-search.mjs` that reads the Auth0
+   JWT from the live browser's localStorage, POSTs a test saved
+   search with `schedule.enabled=true` and a short cron, waits
+   for a run, and inspects `/results` + `$vt_<id>` + lookups.
+3. File a Cribl platform feature request for an install-time
+   hook if confirmed missing.
 
 #### 2b. Durable baseline for latency anomaly detection
 
