@@ -76,23 +76,114 @@ attribute filters and time-series plotting.
 This work may also benefit from a new query builder pattern the other
 features can reuse.
 
-### 2. Alerting + SLOs (via Cribl Saved Searches + alerts, no KQL exposed)
+### 2. Durable baselines, alerts, and SLOs (via scheduled Cribl Saved Searches)
 
-The single biggest reactive-to-proactive upgrade. For each of the
-primary objects the app shows (service, operation, edge, log stream),
-provide a "Create alert" affordance that:
+One shared infrastructure problem unblocks three features at once:
+durable baselines for anomaly detection, user-facing alerts, and SLO
+budget tracking. All three need the app to **provision scheduled
+Cribl Saved Searches** at install time (or on first run), keep them
+up-to-date across upgrades, and consume their persisted output.
 
-- Captures the current filter context (service, operation, severity,
-  range)
-- Asks for a threshold in plain terms ("error rate > 5%", "p95 > 2s",
-  "request rate drops by 50%")
-- Generates a KQL saved search behind the scenes
-- Creates a Cribl alert against that saved search
-- Stores app-level metadata (alert name, owning view, UI context) in
-  the pack-scoped KV so we can render a coherent "Alerts" page
+**Why this is now priority 2**: The current `listOperationAnomalies`
+baseline is a ~24h span-range query fired at page load. That's
+expensive (scans every span in 24h on every Home refresh), fragile
+(a multi-day incident poisons the baseline), and impossible to
+extend to week-over-week comparisons or seasonality. The only
+sustainable answer is a scheduled search that computes per-(svc, op)
+p50/p95/p99 on a rolling basis, persists the results somewhere
+queryable, and lets the UI read them cheaply.
 
-SLOs sit on top of the same plumbing — an SLO is an alert + budget
-tracking over a longer window, both expressible as saved searches.
+Same pattern, same plumbing works for alerts: "create alert" on a
+catalog row → app persists a new scheduled saved search + threshold
+evaluation, stores metadata so the Alerts page can render it. And
+for SLOs: a scheduled search that tracks error budget over a rolling
+28-day window.
+
+#### 2a. Research tasks (do these first — they determine the shape)
+
+- **Saved search provisioning API.** What Cribl Search REST endpoints
+  exist for creating / updating / deleting saved searches? What's the
+  auth context inside a Cribl App sandbox iframe — can the app make
+  authenticated calls to the control-plane API the same way it makes
+  KV calls, or is there a separate endpoint? Document the schema of a
+  saved search definition (query, schedule expression, output target).
+- **Scheduled-search execution model.** How does Cribl execute a
+  scheduled search? Where do the results land — in a dedicated
+  dataset, a KV key, an event table, something like Splunk's
+  `$vt_results$` summary indexing? How long are results retained?
+- **Result persistence target.** Three candidates worth comparing:
+  1. **Pack-scoped KV store** — cheapest, already in use for app
+     settings. Writable from both the app and presumably from a
+     scheduled search's output stage. Best for small results (a few
+     hundred baseline rows).
+  2. **Cribl lookups** — named tabular references that any KQL query
+     can join against. Best if baselines need to be queryable from
+     other saved searches.
+  3. **Dedicated `otel_baselines` dataset** — if Cribl Search supports
+     a scheduled search writing to a separate dataset, this scales
+     best and stays queryable without app mediation.
+- **Install-time hook on the Cribl App Platform.** Does the platform
+  support a "run this script when the pack is installed" hook (like a
+  Kubernetes operator or a Helm `post-install` job)? If yes, document
+  it and use it. If no, flag that as a **platform request** to the
+  Cribl team and design a first-run workflow instead.
+- **Idempotency + upgrade path.** How do we name provisioned searches
+  so we can find and update them on subsequent installs without
+  stomping user edits? Tag-based naming (`traceexplorer:baseline:op`)
+  feels right. How do we handle schema migrations when a new app
+  version needs a different baseline shape?
+
+#### 2b. Durable baseline for latency anomaly detection
+
+Replaces the in-memory 24h baseline in `listOperationAnomalies`:
+
+- A scheduled search runs every N minutes, computing per-(service,
+  operation) p50/p95/p99 over a rolling baseline window (7 days,
+  excluding the most recent hour so fresh incidents don't pollute
+  the baseline)
+- Results persist to the chosen target (KV / lookup / dataset)
+- The app reads the latest baseline row on page load — one cheap
+  lookup instead of a 24h span aggregation — and compares against
+  the current window
+- Gracefully degrades: if the baseline hasn't been populated yet
+  (first run, upgrade), fall back to the current in-memory 24h
+  approximation
+
+#### 2c. User-facing alerts
+
+- "Create alert" button on Home catalog rows, Service Detail, edges,
+  and logs — captures the current filter context and surfaces a
+  plain-language threshold form ("error rate > 5%", "p95 > 2s",
+  "request rate drops by 50%", "op p95 > N× baseline")
+- Under the hood the app generates a KQL saved search, creates a
+  Cribl alert against it via the same provisioning pipeline, and
+  stores app-level metadata (alert name, owning view, UI context)
+- Rendered on an "Alerts" page that lists all app-managed alerts,
+  their current state, recent firings, and a link back to the view
+  where they were created
+
+#### 2d. SLO budgets
+
+Thin layer on top of 2c. An SLO is a saved search that tracks
+(success count / total count) over a 28-day rolling window, plus a
+budget burn rate. Same provisioning plumbing, different threshold
+semantics and UI (error budget remaining, burn alerts at 1h / 6h /
+24h windows).
+
+#### 2e. First-run workflow + upgrade handling
+
+Assuming no install hook exists:
+
+- On first load, the app checks KV for a `provisioned-version` key
+- If absent or stale, show a one-time dialog: "Trace Explorer needs
+  to create N scheduled searches to power baselines and alerts.
+  [Create them]"
+- App calls the saved-search API with idempotent names; if a search
+  already exists, update it in place
+- Write `provisioned-version` to KV on success
+- On app upgrade, the same check runs: if stored version differs from
+  current, run the diff and update / add / remove scheduled searches
+  as needed. Never delete user-created searches.
 
 ### 3. Error tracking / Errors Inbox
 
@@ -232,28 +323,56 @@ As of the last commit on `jaeger-clone`:
 
 - Home: service catalog with rate / error / p50/p95/p99 columns, delta
   chips vs. previous window, error classes, slowest trace classes,
-  sortable columns
+  **latency anomalies widget** (ops ≥5× baseline p95), sortable columns
+- **Health buckets**: error-rate (watch/warn/critical) + `traffic_drop`
+  (rate fell ≥50% vs prior window) + `latency_anomaly` (op p95 ≥5×
+  baseline). Precedence: critical > warn > latency_anomaly >
+  traffic_drop > watch > healthy > idle. Row tints on Home catalog,
+  halo rings on System Architecture nodes.
 - Search: fixed-shape form with service / operation / tags / duration
   / limit / lookback; results table; stream-noise trace filter
   respected (via Settings toggle)
 - Logs: standalone log search tab with service / severity / body / limit
   / range filters; sticky facet sidebar; fills vertical viewport
+- Metrics: Datadog-style explorer tab with metric picker, group-by
+  dimensions, rate-of-counter derivation, histogram percentile from
+  means
 - Compare: two-trace structural diff
 - System Architecture: force-directed + isometric graphs, pan+zoom,
   edge-level health, messaging edges, node hover tooltip with
-  lazy-loaded operations breakdown, edge hover tooltip with rich card
+  lazy-loaded operations breakdown + traffic-drop delta, edge hover
+  tooltip with rich card
 - Service Detail: RED charts (rate, error, p50/p95/p99), top
-  operations, recent errors, dependencies, p99 delta chip
+  operations, recent errors, dependencies, p99 delta chip, **Dependency
+  latencies / Runtime health / Infrastructure metric cards** (batched
+  single query)
 - Trace detail: waterfall, span detail with attributes / events /
   logs / process tags / exception stack traces, trace logs tab
 - Settings: dataset selection + stream-filter toggle, persisted in
   pack-scoped KV
-- Infrastructure: CLAUDE.md, FAILURE-SCENARIOS.md reference,
-  scripts/flagd-set.sh helper for flipping demo flags
+- Infrastructure: CLAUDE.md, FAILURE-SCENARIOS.md reference, Cribl MCP
+  server wired via `.mcp.json`, scripts/flagd-set.sh helper,
+  scripts/cribl-mcp.sh container manager, browser automation helpers
 
 ## Next up
 
-**Metrics support** — see priority #1 above. First concrete step is
-to inspect the metric record schema in the `otel` dataset so we know
-what we're working with. Then build the query layer, then a Metrics
-tab in the navbar.
+**Durable baselines + alerts (priority #2)** — the in-memory 24h
+baseline now powering the latency-anomaly widget is a stopgap. The
+real answer is scheduled Cribl Saved Searches that persist rolling
+baselines the app can read cheaply. Start with the research tasks in
+2a (provisioning API, scheduled-search execution model, persistence
+target, install-time hook, idempotency) — those answers shape
+everything else. Once the shape is clear, build the first-run
+workflow in 2e, then migrate the anomaly detector in 2b off the
+in-memory baseline.
+
+Follow-up enhancements to the anomaly widget itself (after 2b lands):
+
+- **Reason pills on each row**: today every row shows one number
+  (ratio vs baseline). Add multi-heuristic tagging — ratio, absolute
+  p95, volume jump, error-rate delta, child-attribution anomaly —
+  so users can see *why* an op was flagged and disagree when needed.
+- **Per-op anomaly signal on Service Detail**: highlight the
+  individual row in the Top Operations table the same way the Home
+  catalog tints the service row, with a tooltip explaining the
+  baseline comparison.
