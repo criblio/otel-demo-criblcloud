@@ -14,3 +14,6 @@ Thumbs.db
 k8s/bin
 k8s/backups
 k8s/helm-values-processed.yaml
+
+# Node
+node_modules/

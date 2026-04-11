@@ -51,6 +51,24 @@ The `.env` file requires three values:
 | `CRIBL_USERNAME` | Basic auth username | `cribl_user` |
 | `CRIBL_PASSWORD` | Basic auth password | `my_password` |
 
+## Cribl MCP Server (optional, for Claude Code)
+
+A local [Cribl MCP Server](https://docs.cribl.io/copilot/cribl-mcp-server/) can be run in Docker to let Claude Code query Cribl Search / Stream directly.
+
+1. Add Cribl Cloud API credentials to `.env` (these are **different** from the OTLP credentials above — create them under Organization → API Credentials in Cribl Cloud):
+   ```
+   CRIBL_BASE_URL=https://default-<org-id>.cribl.cloud
+   CRIBL_CLIENT_ID=...
+   CRIBL_CLIENT_SECRET=...
+   ```
+
+2. Start the container:
+   ```bash
+   ./scripts/cribl-mcp.sh start
+   ```
+
+3. Claude Code will pick up the server automatically via `.mcp.json` (it uses `mcp-remote` to bridge to `http://127.0.0.1:3030/mcp`). Other subcommands: `stop`, `restart`, `status`, `logs`.
+
 ## Monitoring
 
 ```bash
