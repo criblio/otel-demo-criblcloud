@@ -112,104 +112,124 @@ export default function LogsPage() {
   );
 
   return (
-    <div className={s.page}>
-      <div className={s.hero}>
-        <div>
-          <h1 className={s.heroTitle}>Logs</h1>
-          <div className={s.heroSubtitle}>
-            Standalone log search across all services in the{' '}
-            <code>otel</code> dataset.
+    <div className={s.layout}>
+      <aside className={s.sidebar}>
+        <div className={s.panel}>
+          <div className={s.panelHeader}>
+            <span className={s.panelTitle}>Filters</span>
+            <span className={s.panelHint}>{services.length} services</span>
           </div>
-        </div>
-        <TimeRangePicker value={range} onChange={setRange} />
-      </div>
 
-      {error && <StatusBanner kind="error">{error}</StatusBanner>}
+          <label className={s.field}>
+            <span className={s.fieldLabel}>Service</span>
+            <select
+              className={s.select}
+              value={service}
+              onChange={(e) => setService(e.target.value)}
+            >
+              <option value="">All services</option>
+              {services.map((svc) => (
+                <option key={svc} value={svc}>
+                  {svc}
+                </option>
+              ))}
+            </select>
+          </label>
 
-      <div className={s.filterBar}>
-        <label className={s.field}>
-          <span className={s.fieldLabel}>Service</span>
-          <select
-            className={s.select}
-            value={service}
-            onChange={(e) => setService(e.target.value)}
-          >
-            <option value="">All services</option>
-            {services.map((svc) => (
-              <option key={svc} value={svc}>
-                {svc}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className={s.field}>
-          <span className={s.fieldLabel}>Severity</span>
-          <div className={s.sevGroup}>
-            {severityButtons.map((b) => (
-              <button
-                key={b.id}
-                type="button"
-                className={`${s.sevBtn} ${severity === b.id ? s.sevBtnActive : ''}`}
-                onClick={() => setSeverity(b.id)}
-              >
-                {b.label}
-              </button>
-            ))}
+          <div className={s.field}>
+            <span className={s.fieldLabel}>Severity</span>
+            <div className={s.sevGroup}>
+              {severityButtons.map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  className={`${s.sevBtn} ${severity === b.id ? s.sevBtnActive : ''}`}
+                  onClick={() => setSeverity(b.id)}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
 
-        <label className={`${s.field} ${s.grow}`}>
-          <span className={s.fieldLabel}>Body contains</span>
-          <input
-            type="text"
-            className={s.input}
-            placeholder="free-text substring match"
-            value={bodyQuery}
-            onChange={(e) => setBodyQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') setCommittedBody(bodyQuery.trim());
+          <label className={s.field}>
+            <span className={s.fieldLabel}>Body contains</span>
+            <input
+              type="text"
+              className={s.input}
+              placeholder="free-text substring"
+              value={bodyQuery}
+              onChange={(e) => setBodyQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') setCommittedBody(bodyQuery.trim());
+              }}
+            />
+          </label>
+
+          <label className={s.field}>
+            <span className={s.fieldLabel}>Lookback</span>
+            <TimeRangePicker value={range} onChange={setRange} />
+          </label>
+
+          <label className={`${s.field} ${s.numericField}`}>
+            <span className={s.fieldLabel}>Limit</span>
+            <input
+              type="number"
+              min={1}
+              max={1000}
+              step={50}
+              className={`${s.input} ${s.numericInput}`}
+              value={limit}
+              onChange={(e) =>
+                setLimit(
+                  Math.max(
+                    1,
+                    Math.min(1000, Number(e.target.value) || DEFAULT_LIMIT),
+                  ),
+                )
+              }
+            />
+          </label>
+
+          <button
+            type="button"
+            className={s.applyBtn}
+            onClick={() => {
+              setCommittedBody(bodyQuery.trim());
+              void runSearch();
             }}
-          />
-        </label>
+          >
+            Apply
+          </button>
+        </div>
+      </aside>
 
-        <label className={s.field}>
-          <span className={s.fieldLabel}>Limit</span>
-          <input
-            type="number"
-            min={1}
-            max={1000}
-            step={50}
-            className={`${s.input} ${s.limitInput}`}
-            value={limit}
-            onChange={(e) => setLimit(Math.max(1, Math.min(1000, Number(e.target.value) || DEFAULT_LIMIT)))}
-          />
-        </label>
+      <main className={s.results}>
+        <div className={s.hero}>
+          <div>
+            <h1 className={s.heroTitle}>Logs</h1>
+            <div className={s.heroSubtitle}>
+              Standalone log search across all services in the{' '}
+              <code>otel</code> dataset.
+            </div>
+          </div>
+        </div>
 
-        <button
-          type="button"
-          className={s.applyBtn}
-          onClick={() => {
-            setCommittedBody(bodyQuery.trim());
-            void runSearch();
-          }}
-        >
-          Apply
-        </button>
-      </div>
+        {error && <StatusBanner kind="error">{error}</StatusBanner>}
 
-      <TraceLogsView
-        logs={logs}
-        loading={loading}
-        title="Results"
-        subtitle={
-          loading
-            ? 'Searching…'
-            : `${logs.length.toLocaleString()} entr${logs.length === 1 ? 'y' : 'ies'} — newest first`
-        }
-        absoluteTimestamps
-        emptyMessage="No logs match these filters."
-      />
+        <TraceLogsView
+          logs={logs}
+          loading={loading}
+          title="Results"
+          subtitle={
+            loading
+              ? 'Searching…'
+              : `${logs.length.toLocaleString()} entr${logs.length === 1 ? 'y' : 'ies'} — newest first`
+          }
+          absoluteTimestamps
+          emptyMessage="No logs match these filters."
+        />
+      </main>
     </div>
   );
 }

@@ -1,42 +1,71 @@
+/*
+ * SearchForm is rendered inside a 260px-wide sidebar on SearchPage.
+ * Fields stack vertically. Widths aren't uniform: text and select
+ * fields take the full column width (because service / operation
+ * names are long), while numeric inputs sit at narrow natural sizes
+ * and pair up where they belong together (min/max duration).
+ */
+
 .form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: var(--cds-space-md);
-  align-items: end;
-  padding: var(--cds-space-lg);
+  padding: var(--cds-space-md) var(--cds-space-lg);
   background: var(--cds-color-bg);
   border: 1px solid var(--cds-color-border-subtle);
   border-radius: var(--cds-radius-lg);
   box-shadow: var(--cds-shadow-sm);
-  margin-bottom: var(--cds-space-lg);
+}
+
+.formHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cds-space-sm);
+  margin-bottom: var(--cds-space-xs);
+  padding-bottom: var(--cds-space-xs);
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+}
+.formTitle {
+  font-size: var(--cds-font-size-sm);
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+  letter-spacing: 0.2px;
+}
+.formHint {
+  font-size: 10px;
+  color: var(--cds-color-fg-subtle);
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: var(--cds-space-xs);
+  gap: 4px;
   min-width: 0;
 }
 
 .label {
-  font-size: var(--cds-font-size-xs);
+  font-size: 10px;
   font-weight: var(--cds-font-weight-semibold);
   color: var(--cds-color-fg-muted);
   text-transform: uppercase;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.5px;
 }
 
 .input,
 .select {
-  height: 32px;
-  padding: 0 var(--cds-space-md);
+  height: 30px;
+  padding: 0 10px;
   font-size: var(--cds-font-size-sm);
   color: var(--cds-color-fg);
   background: var(--cds-color-bg);
   border: 1px solid var(--cds-color-border);
-  border-radius: var(--cds-radius-md);
+  border-radius: var(--cds-radius-sm);
   outline: none;
-  transition: border-color var(--cds-transition-fast);
+  transition: border-color var(--cds-transition-fast), box-shadow var(--cds-transition-fast);
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
 }
 .input:focus,
 .select:focus {
@@ -50,15 +79,28 @@
   cursor: not-allowed;
 }
 
-.actions {
-  display: flex;
+/* Min + Max duration share a row. Each half gets its own label so
+ * it reads as "Duration: min …, max …" visually. */
+.durationRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: var(--cds-space-sm);
-  align-items: end;
+}
+
+/* The Limit input is a small integer; it doesn't deserve the full
+ * sidebar width. Pin it to a natural width and left-align. */
+.numericField {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.numericInput {
+  width: 80px;
 }
 
 .primaryBtn {
-  height: 32px;
-  padding: 0 var(--cds-space-lg);
+  margin-top: var(--cds-space-xs);
+  height: 34px;
+  width: 100%;
   font-size: var(--cds-font-size-sm);
   font-weight: var(--cds-font-weight-semibold);
   color: var(--cds-color-primary-fg);
@@ -66,12 +108,13 @@
   border: none;
   border-radius: var(--cds-radius-md);
   box-shadow: var(--cds-shadow-sm);
-  transition: background var(--cds-transition-fast);
+  cursor: pointer;
+  transition: background var(--cds-transition-fast), filter var(--cds-transition-fast);
 }
 .primaryBtn:hover:not(:disabled) {
-  background: var(--cds-color-primary-hover);
+  filter: brightness(1.05);
 }
 .primaryBtn:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: not-allowed;
 }

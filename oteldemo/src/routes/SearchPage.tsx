@@ -6,6 +6,7 @@ import TraceTable from '../components/TraceTable';
 import StatusBanner from '../components/StatusBanner';
 import { findTraces } from '../api/search';
 import type { TraceSummary } from '../api/types';
+import s from './SearchPage.module.css';
 
 function fromQueryString(params: URLSearchParams): SearchFormState {
   return {
@@ -85,15 +86,19 @@ export default function SearchPage() {
   }
 
   return (
-    <div>
-      <SearchForm state={formState} onSubmit={handleSubmit} loading={loading} />
-      {error && <StatusBanner kind="error">{error}</StatusBanner>}
-      {hasSearched && !error && <TraceTable traces={results} />}
-      {!hasSearched && !error && (
-        <StatusBanner kind="info">
-          Pick a service and click <strong>Find Traces</strong> to begin.
-        </StatusBanner>
-      )}
+    <div className={s.layout}>
+      <aside className={s.sidebar}>
+        <SearchForm state={formState} onSubmit={handleSubmit} loading={loading} />
+      </aside>
+      <main className={s.results}>
+        {error && <StatusBanner kind="error">{error}</StatusBanner>}
+        {hasSearched && !error && <TraceTable traces={results} />}
+        {!hasSearched && !error && (
+          <StatusBanner kind="info">
+            Pick a service and click <strong>Find Traces</strong> to begin.
+          </StatusBanner>
+        )}
+      </main>
     </div>
   );
 }

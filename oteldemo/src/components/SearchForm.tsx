@@ -66,6 +66,11 @@ export default function SearchForm({ state, onSubmit, loading }: Props) {
 
   return (
     <form className={s.form} onSubmit={handleSubmit}>
+      <div className={s.formHeader}>
+        <span className={s.formTitle}>Filters</span>
+        <span className={s.formHint}>{services.length} services</span>
+      </div>
+
       <div className={s.field}>
         <label className={s.label}>Service</label>
         <select
@@ -74,7 +79,9 @@ export default function SearchForm({ state, onSubmit, loading }: Props) {
           onChange={(e) => update('service', e.target.value)}
           disabled={loading}
         >
-          <option value="">{servicesError ? 'Error loading services' : 'Select a service…'}</option>
+          <option value="">
+            {servicesError ? 'Error loading services' : 'Select a service…'}
+          </option>
           {services.map((svc) => (
             <option key={svc} value={svc}>
               {svc}
@@ -128,38 +135,41 @@ export default function SearchForm({ state, onSubmit, loading }: Props) {
         />
       </div>
 
-      <div className={s.field}>
-        <label className={s.label}>Min Duration (ms)</label>
-        <input
-          className={s.input}
-          type="number"
-          min="0"
-          step="1"
-          placeholder="0"
-          value={draft.minDuration}
-          onChange={(e) => update('minDuration', e.target.value)}
-          disabled={loading}
-        />
+      {/* Min + Max duration are semantically one filter — pair them
+       * in a single row so it reads "duration between X and Y ms". */}
+      <div className={s.durationRow}>
+        <div className={s.field}>
+          <label className={s.label}>Min ms</label>
+          <input
+            className={s.input}
+            type="number"
+            min="0"
+            step="1"
+            placeholder="0"
+            value={draft.minDuration}
+            onChange={(e) => update('minDuration', e.target.value)}
+            disabled={loading}
+          />
+        </div>
+        <div className={s.field}>
+          <label className={s.label}>Max ms</label>
+          <input
+            className={s.input}
+            type="number"
+            min="0"
+            step="1"
+            placeholder="∞"
+            value={draft.maxDuration}
+            onChange={(e) => update('maxDuration', e.target.value)}
+            disabled={loading}
+          />
+        </div>
       </div>
 
-      <div className={s.field}>
-        <label className={s.label}>Max Duration (ms)</label>
-        <input
-          className={s.input}
-          type="number"
-          min="0"
-          step="1"
-          placeholder="∞"
-          value={draft.maxDuration}
-          onChange={(e) => update('maxDuration', e.target.value)}
-          disabled={loading}
-        />
-      </div>
-
-      <div className={s.field}>
+      <div className={`${s.field} ${s.numericField}`}>
         <label className={s.label}>Limit</label>
         <input
-          className={s.input}
+          className={`${s.input} ${s.numericInput}`}
           type="number"
           min="1"
           max="1000"
@@ -169,11 +179,9 @@ export default function SearchForm({ state, onSubmit, loading }: Props) {
         />
       </div>
 
-      <div className={s.actions}>
-        <button type="submit" className={s.primaryBtn} disabled={loading || !draft.service}>
-          {loading ? 'Searching…' : 'Find Traces'}
-        </button>
-      </div>
+      <button type="submit" className={s.primaryBtn} disabled={loading || !draft.service}>
+        {loading ? 'Searching…' : 'Find Traces'}
+      </button>
     </form>
   );
 }

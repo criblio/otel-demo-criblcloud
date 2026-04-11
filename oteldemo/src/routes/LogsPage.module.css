@@ -1,5 +1,58 @@
-.page {
+/*
+ * Logs page layout: sidebar of facets on the left, results on the
+ * right. Matches the Search page pattern (SearchPage.module.css).
+ * The sidebar is sticky so filters stay in view while scrolling
+ * through long log result lists.
+ */
+
+.layout {
+  display: flex;
+  gap: var(--cds-space-lg);
   padding: var(--cds-space-lg);
+  align-items: flex-start;
+}
+
+.sidebar {
+  width: 260px;
+  flex: 0 0 260px;
+  position: sticky;
+  top: var(--cds-space-lg);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-space-md);
+  padding: var(--cds-space-md) var(--cds-space-lg);
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+  box-shadow: var(--cds-shadow-sm);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cds-space-sm);
+  margin-bottom: var(--cds-space-xs);
+  padding-bottom: var(--cds-space-xs);
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+}
+.panelTitle {
+  font-size: var(--cds-font-size-sm);
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+  letter-spacing: 0.2px;
+}
+.panelHint {
+  font-size: 10px;
+  color: var(--cds-color-fg-subtle);
+}
+
+.results {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--cds-space-md);
@@ -29,71 +82,68 @@
   font-size: 11px;
 }
 
-.filterBar {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--cds-space-md);
-  padding: var(--cds-space-md);
-  background: var(--cds-color-bg);
-  border: 1px solid var(--cds-color-border);
-  border-radius: var(--cds-radius-md);
-  flex-wrap: wrap;
-}
-
 .field {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-.grow {
-  flex: 1 1 300px;
-  min-width: 200px;
+  min-width: 0;
 }
 .fieldLabel {
   font-size: 10px;
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: var(--cds-color-fg-muted);
-  font-weight: var(--cds-font-weight-semibold);
 }
 
 .select,
 .input {
-  padding: 6px 10px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: var(--cds-font-size-sm);
+  color: var(--cds-color-fg);
+  background: var(--cds-color-bg);
   border: 1px solid var(--cds-color-border);
   border-radius: var(--cds-radius-sm);
-  background: var(--cds-color-bg);
-  color: var(--cds-color-fg);
-  font-size: 13px;
-  min-width: 140px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  transition: border-color var(--cds-transition-fast), box-shadow var(--cds-transition-fast);
 }
 .input:focus,
 .select:focus {
-  outline: none;
   border-color: var(--cds-color-accent);
-}
-.limitInput {
-  min-width: 80px;
-  max-width: 90px;
+  box-shadow: 0 0 0 2px var(--cds-color-accent-subtle);
 }
 
+/* Limit is a small integer — doesn't need the full sidebar width. */
+.numericField {
+  align-items: flex-start;
+}
+.numericInput {
+  width: 80px;
+}
+
+/* Severity tier buttons. Wrap onto two rows inside the narrow sidebar
+ * — 5 buttons at ~60px each is too wide for a 220px inner column. */
 .sevGroup {
   display: flex;
-  gap: 2px;
-  border: 1px solid var(--cds-color-border);
-  border-radius: var(--cds-radius-sm);
-  overflow: hidden;
-  background: var(--cds-color-bg);
+  flex-wrap: wrap;
+  gap: 4px;
 }
 .sevBtn {
-  padding: 6px 12px;
-  border: none;
-  background: transparent;
+  flex: 1 1 auto;
+  min-width: 56px;
+  padding: 6px 10px;
+  background: var(--cds-color-bg);
   color: var(--cds-color-fg-muted);
-  font-size: 12px;
-  font-weight: var(--cds-font-weight-medium);
+  border: 1px solid var(--cds-color-border);
+  border-radius: var(--cds-radius-sm);
+  font-size: 11px;
+  font-weight: var(--cds-font-weight-semibold);
   cursor: pointer;
-  transition: background var(--cds-transition-fast), color var(--cds-transition-fast);
+  transition: background var(--cds-transition-fast), color var(--cds-transition-fast), border-color var(--cds-transition-fast);
 }
 .sevBtn:hover {
   background: var(--cds-color-bg-subtle);
@@ -102,6 +152,7 @@
 .sevBtnActive {
   background: var(--cds-color-accent);
   color: #fff;
+  border-color: var(--cds-color-accent);
 }
 .sevBtnActive:hover {
   background: var(--cds-color-accent);
@@ -109,15 +160,18 @@
 }
 
 .applyBtn {
-  padding: 7px 16px;
-  background: var(--cds-color-accent);
-  color: #fff;
-  border: none;
-  border-radius: var(--cds-radius-sm);
-  font-size: 12px;
+  margin-top: var(--cds-space-xs);
+  height: 34px;
+  width: 100%;
+  font-size: var(--cds-font-size-sm);
   font-weight: var(--cds-font-weight-semibold);
+  color: #fff;
+  background: var(--cds-color-accent);
+  border: none;
+  border-radius: var(--cds-radius-md);
+  box-shadow: var(--cds-shadow-sm);
   cursor: pointer;
-  transition: background var(--cds-transition-fast);
+  transition: filter var(--cds-transition-fast);
 }
 .applyBtn:hover {
   filter: brightness(1.08);

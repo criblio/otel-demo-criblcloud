@@ -1,0 +1,31 @@
+/*
+ * Search page layout: sidebar of facets on the left, results table
+ * filling the remaining width on the right. The sidebar is sticky so
+ * filters stay in view while the user scrolls through long result lists.
+ *
+ * The filter panel width is intentionally modest (260px) — wider looks
+ * heavy on large screens, and the inputs inside fit comfortably at that
+ * width given the label hierarchy.
+ */
+
+.layout {
+  display: flex;
+  gap: var(--cds-space-lg);
+  padding: var(--cds-space-lg);
+  align-items: flex-start;
+}
+
+.sidebar {
+  width: 260px;
+  flex: 0 0 260px;
+  position: sticky;
+  top: var(--cds-space-lg);
+}
+
+.results {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-space-md);
+}
