@@ -29,7 +29,8 @@ export type HealthBucket =
   | 'warn'
   | 'critical'
   | 'idle'
-  | 'traffic_drop';
+  | 'traffic_drop'
+  | 'latency_anomaly';
 
 export interface HealthInfo {
   bucket: HealthBucket;
@@ -47,6 +48,10 @@ const HEALTH: Record<HealthBucket, { color: string; label: string }> = {
     color: '#a855f7',
     label: 'Traffic drop vs prior window',
   },
+  latency_anomaly: {
+    color: '#06b6d4',
+    label: 'Latency anomaly vs prior window',
+  },
 };
 
 /** Very subtle row-background tint for a health bucket, matched to
@@ -59,6 +64,7 @@ const HEALTH_BG: Record<HealthBucket, string> = {
   critical: 'rgba(220, 38, 38, 0.12)',
   idle: 'transparent',
   traffic_drop: 'rgba(168, 85, 247, 0.12)',
+  latency_anomaly: 'rgba(6, 182, 212, 0.12)',
 };
 
 export function healthRowBg(bucket: HealthBucket): string {
@@ -70,6 +76,7 @@ export const HEALTH_LEGEND: Array<{ bucket: HealthBucket; color: string; label: 
   { bucket: 'watch', ...HEALTH.watch },
   { bucket: 'warn', ...HEALTH.warn },
   { bucket: 'critical', ...HEALTH.critical },
+  { bucket: 'latency_anomaly', ...HEALTH.latency_anomaly },
   { bucket: 'traffic_drop', ...HEALTH.traffic_drop },
   { bucket: 'idle', ...HEALTH.idle },
 ];
@@ -91,18 +98,31 @@ const TRAFFIC_DROP_THRESHOLD = 0.5;
 export function serviceHealth(
   summary: ServiceSummary | undefined,
   prev?: ServiceSummary,
+  /** Set of service names with at least one operation latency
+   * anomaly in the current window. Optional so callers that don't
+   * fetch anomaly data (SystemArchPage, etc.) keep working
+   * unchanged. */
+  anomalousServices?: Set<string>,
 ): HealthInfo {
   if (!summary || summary.requests === 0) {
     return { bucket: 'idle', ...HEALTH.idle };
   }
   const errInfo = healthFromRate(summary.errorRate);
   // Errors dominate when they're already significant — an erroring
-  // service is still erroring even if the volume also dropped.
+  // service is still erroring even if the volume also dropped or a
+  // specific op is anomalously slow.
   if (errInfo.bucket === 'critical' || errInfo.bucket === 'warn') {
     return errInfo;
   }
-  // Otherwise check the traffic-drop rule. Requires a prior window
-  // with enough samples to trust the ratio.
+  // Latency anomaly beats traffic-drop in precedence — a specific
+  // operation that's 5×+ slower than baseline is the more actionable
+  // signal (it points at a named op), while traffic-drop is usually
+  // a symptom of something upstream.
+  if (anomalousServices?.has(summary.service)) {
+    return { bucket: 'latency_anomaly', ...HEALTH.latency_anomaly };
+  }
+  // Traffic-drop rule. Requires a prior window with enough samples
+  // to trust the ratio.
   if (prev && prev.requests >= MIN_BASELINE_REQUESTS) {
     const ratio = summary.requests / prev.requests;
     if (ratio <= TRAFFIC_DROP_THRESHOLD) {

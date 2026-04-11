@@ -139,6 +139,32 @@ export interface SlowTraceClass {
   sampleTraceIDs: string[];
 }
 
+/**
+ * A per-operation latency anomaly — an operation whose current-window
+ * p95 is significantly higher than its immediately-prior window. Used
+ * to surface signals the absolute-duration "Slowest trace classes"
+ * widget misses: e.g., a consumer operation that normally runs in
+ * ~100ms now runs at 18s because of consumer-side delay injected by
+ * the kafka-queue-problems scenario.
+ *
+ * TODO: attach a list of "reasons" explaining why this was flagged —
+ * ratio vs baseline, absolute p95, volume jump, etc. — so the widget
+ * can show reason pills ("×90 baseline", "5s+ absolute"). Plumbing is
+ * in types/search/queries; the component just needs the extra fields.
+ */
+export interface OperationAnomaly {
+  service: string;
+  operation: string;
+  /** Current-window p95 duration in microseconds. */
+  currP95Us: number;
+  /** Prior-window p95 duration in microseconds — the baseline. */
+  prevP95Us: number;
+  /** currP95Us / prevP95Us — how many times worse than baseline. */
+  ratio: number;
+  /** Current-window request count for this op. */
+  requests: number;
+}
+
 /** A class of errors: (service, operation, first-line-of-message). */
 export interface ErrorClass {
   service: string;
