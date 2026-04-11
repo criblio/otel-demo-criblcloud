@@ -238,28 +238,42 @@ export function slowestTraces(service?: string): string {
  * among rows satisfying the predicate, which for a single-root trace is
  * just "the root span's value."
  *
- * Streaming long-poll traces (flagd.evaluation.v1.Service/EventStream
- * and similar) are filtered out after the root op is known. These spans
- * hold a connection open for 10 minutes by design so they always dominate
- * a duration-sorted list even though they're not failures. If we don't
- * filter them, the Home "Slowest trace classes" panel becomes a wall of
- * the same flagd stream repeated for every service and the real slow
- * traces get pushed off the list.
+ * Streaming / long-poll noise filter: persistent connections (gRPC
+ * server-streaming, SSE, websockets, HTTP long-poll) produce traces
+ * that sit at multi-minute durations but contain **only one or two
+ * spans** — the connection-holding RPC and maybe one internal scope
+ * span. A legitimate slow trace accumulates spans as it works
+ * (client → server → downstream rpc → db → ...), so
+ * `span_count >= 3` is a clean separator.
+ *
+ * We empirically verified this against the OTel demo: every
+ * `flagd.evaluation.v1.Service/EventStream` trace in the dataset has
+ * span_count ∈ {1, 2}, while real slow traces from `kafkaQueueProblems`
+ * (`accounting order-consumed`) all have span_count ≥ 3. The filter
+ * is environment-agnostic — it doesn't reference any service or
+ * operation name.
+ *
+ * Threshold: span_count ≤ 2 AND duration > 30s. 30s is generous enough
+ * to keep any normal slow-but-real request while still catching every
+ * long-poll we've seen.
  */
+const STREAM_MIN_SPANS = 3;
+const STREAM_DURATION_US = 30_000_000;
+
 export function rawSlowestTraces(limit: number = 500): string {
   return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
             parent=tostring(parent_span_id),
             is_root=(parent=="" or isempty(parent))
-    | summarize trace_start_ns=min(start_time_unix_nano),
+    | summarize span_count=count(),
+                trace_start_ns=min(start_time_unix_nano),
                 trace_end_ns=max(end_time_unix_nano),
                 root_svc=minif(svc, is_root),
                 root_op=minif(name, is_root)
       by trace_id
     | extend trace_dur_us=(toreal(trace_end_ns)-toreal(trace_start_ns))/1000.0
     | where isnotnull(root_svc)
-    | where not (tostring(root_op) endswith "/EventStream")
-    | where not (tostring(root_op) startswith "flagd.")
+    | where not (span_count < ${STREAM_MIN_SPANS} and trace_dur_us > ${STREAM_DURATION_US})
     | sort by trace_dur_us desc
     | limit ${limit}`;
 }
