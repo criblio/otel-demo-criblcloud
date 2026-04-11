@@ -5,12 +5,15 @@ import { binSecondsFor } from '../components/timeRanges';
 import LineChart, { type LineSeries } from '../components/LineChart';
 import TraceBriefList from '../components/TraceBriefList';
 import StatusBanner from '../components/StatusBanner';
+import MetricsCard, { type MetricsCardRow } from '../components/MetricsCard';
 import {
   listServiceSummaries,
   getServiceTimeSeries,
   listOperationSummaries,
   listRecentErrorTraces,
   getDependencies,
+  listServiceMetricNames,
+  getServiceMetricsBatch,
 } from '../api/search';
 import { serviceColor } from '../utils/spans';
 import { previousWindow } from '../utils/timeRange';
@@ -30,6 +33,44 @@ const DEFAULT_RANGE = '-1h';
 
 /** See HomePage — same rationale. */
 const MIN_PREV_SAMPLES = 10;
+
+/**
+ * Static union of every candidate metric that any card might show.
+ * Used to issue a single batched series query at page load time
+ * in parallel with the catalog lookup — accepting a small amount
+ * of over-fetch for metrics the service doesn't actually emit, in
+ * exchange for firing both round trips concurrently. Keep in sync
+ * with the row configs below.
+ */
+const ALL_CARD_METRICS: string[] = [
+  // Protocol
+  'http.client.request.duration',
+  'http.client.duration',
+  'http.server.request.duration',
+  'http.server.duration',
+  'rpc.client.duration',
+  'rpc.server.duration',
+  'db.client.operation.duration',
+  'db.client.connection.count',
+  // Runtime
+  'jvm.memory.used',
+  'jvm.gc.duration',
+  'jvm.thread.count',
+  'jvm.cpu.recent_utilization',
+  'process.runtime.cpython.memory',
+  'process.runtime.cpython.cpu.utilization',
+  'process.runtime.cpython.gc_count',
+  'process.runtime.cpython.thread_count',
+  'process.cpu.utilization',
+  'process.memory.usage',
+  // Infrastructure
+  'k8s.container.restarts',
+  'k8s.container.ready',
+  'k8s.pod.phase',
+  'k8s.container.memory_limit',
+  'k8s.container.memory_request',
+  'k8s.container.cpu_limit',
+];
 
 function fmtUs(us: number): string {
   if (!Number.isFinite(us) || us === 0) return '—';
@@ -89,6 +130,20 @@ export default function ServiceDetailPage() {
   // Trigger a re-fetch when the Settings stream-filter toggle changes,
   // so the Recent errors panel doesn't keep stale server-filtered data.
   const streamFilterEnabled = useStreamFilterEnabled();
+  // Catalog of metrics this service emits (by name). Used by the
+  // Protocol / Runtime / Infrastructure cards to hide sections the
+  // service doesn't actually have data for, and to pick between old
+  // and new semconv metric names.
+  const [serviceMetricSet, setServiceMetricSet] = useState<
+    Set<string> | undefined
+  >(undefined);
+  // Pre-fetched series data for every metric the cards might show,
+  // loaded in a single batched query (instead of one query per row,
+  // which saturated the Cribl search worker pool and queued page
+  // loads for 30+ seconds).
+  const [cardSeriesByMetric, setCardSeriesByMetric] = useState<
+    Map<string, Array<{ t: number; v: number }>> | undefined
+  >(undefined);
 
   const fetchAll = useCallback(async () => {
     setError(null);
@@ -150,8 +205,275 @@ export default function ServiceDetailPage() {
     void fetchAll();
   }, [fetchAll]);
 
+  // Metric cards fire TWO queries in parallel: the catalog (which
+  // tells us which rows to render) and a single batched series
+  // fetch for every candidate metric (which feeds all sparklines).
+  // The batch query over-fetches a bit — it asks for metrics that
+  // may not exist for this service — but running both round trips
+  // concurrently cuts Service Detail load time meaningfully, and
+  // `_metric in (...)` is an indexed filter in Cribl so the over-
+  // fetch costs little. Client-side, we filter the resulting Map
+  // down to metrics that are also in the catalog.
+  useEffect(() => {
+    if (!serviceName) return;
+    let cancelled = false;
+    setServiceMetricSet(undefined);
+    setCardSeriesByMetric(undefined);
+    const binSeconds = binSecondsFor(range);
+    Promise.all([
+      listServiceMetricNames(serviceName, range, 'now').catch(() => [] as string[]),
+      getServiceMetricsBatch(
+        serviceName,
+        ALL_CARD_METRICS,
+        binSeconds,
+        range,
+        'now',
+      ).catch(() => new Map<string, Array<{ t: number; v: number }>>()),
+    ]).then(([list, map]) => {
+      if (cancelled) return;
+      setServiceMetricSet(new Set(list));
+      setCardSeriesByMetric(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [serviceName, range]);
+
   const color = serviceColor(serviceName);
   const rangeMinutes = relativeTimeMs(range) / 60_000;
+
+  // ─────────────────────────────────────────────────────────────
+  // Metrics card row configs (P2 / P3 / P4)
+  //
+  // Each card is declarative — the config lists every candidate
+  // metric the card might show. The MetricsCard component hides
+  // rows whose metrics don't exist in serviceMetricSet, so one
+  // config works across different runtimes and deployment targets.
+  //
+  // Formatters duplicate a little logic from MetricsPage's unit
+  // inference to keep this file self-contained. They could be
+  // lifted into utils/metrics if more callers need them.
+  // ─────────────────────────────────────────────────────────────
+
+  const fmtMs = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${v.toFixed(1)} ms`);
+  const fmtBytes = (v: number) => {
+    if (v >= 1e9) return `${(v / 1e9).toFixed(2)} GB`;
+    if (v >= 1e6) return `${(v / 1e6).toFixed(1)} MB`;
+    if (v >= 1e3) return `${(v / 1e3).toFixed(1)} KB`;
+    return `${v.toFixed(0)} B`;
+  };
+  const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  const fmtInt = (v: number) => v.toFixed(0);
+
+  /**
+   * P2: downstream dependency latencies. Picks up the OTel semconv
+   * HTTP / gRPC / DB client histograms emitted by instrumentation
+   * libraries. Old and new semconv names are grouped into one row
+   * (first match wins). A service only shows the subset of
+   * protocols it actually talks — e.g., a service with only RPC
+   * downstream shows one row, while a service with HTTP + DB shows
+   * two.
+   */
+  const protocolRows: MetricsCardRow[] = [
+    {
+      label: 'HTTP client p95',
+      metric: ['http.client.request.duration', 'http.client.duration'],
+      fetch: 'latest',
+      agg: 'p95',
+      format: fmtMs,
+    },
+    {
+      label: 'HTTP server p95',
+      metric: ['http.server.request.duration', 'http.server.duration'],
+      fetch: 'latest',
+      agg: 'p95',
+      format: fmtMs,
+    },
+    {
+      label: 'gRPC client p95',
+      metric: 'rpc.client.duration',
+      fetch: 'latest',
+      agg: 'p95',
+      format: fmtMs,
+    },
+    {
+      label: 'gRPC server p95',
+      metric: 'rpc.server.duration',
+      fetch: 'latest',
+      agg: 'p95',
+      format: fmtMs,
+    },
+    {
+      label: 'DB query p95',
+      metric: 'db.client.operation.duration',
+      fetch: 'latest',
+      agg: 'p95',
+      format: fmtMs,
+    },
+    {
+      label: 'DB connections',
+      metric: 'db.client.connection.count',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtInt,
+      noSparkline: true,
+    },
+  ];
+
+  /**
+   * P3: runtime health. JVM, Python (cpython), and generic process
+   * metrics all coexist in one config — the card picks whichever
+   * the service actually emits. Services running on the Node SDK
+   * wouldn't emit any of these, and the card would hide itself.
+   */
+  const runtimeRows: MetricsCardRow[] = [
+    // JVM
+    {
+      label: 'JVM memory used',
+      metric: 'jvm.memory.used',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtBytes,
+    },
+    {
+      label: 'JVM GC duration p95',
+      metric: 'jvm.gc.duration',
+      fetch: 'latest',
+      agg: 'p95',
+      format: fmtMs,
+    },
+    {
+      label: 'JVM threads',
+      metric: 'jvm.thread.count',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtInt,
+    },
+    {
+      label: 'JVM CPU',
+      metric: 'jvm.cpu.recent_utilization',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtPct,
+      warn: (v) => v > 0.8,
+    },
+    // Python cpython runtime
+    {
+      label: 'Python memory',
+      metric: 'process.runtime.cpython.memory',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtBytes,
+    },
+    {
+      label: 'Python CPU',
+      metric: 'process.runtime.cpython.cpu.utilization',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtPct,
+      warn: (v) => v > 0.8,
+    },
+    {
+      label: 'Python GC cycles',
+      metric: 'process.runtime.cpython.gc_count',
+      fetch: 'delta',
+      agg: 'max',
+      format: fmtInt,
+    },
+    {
+      label: 'Python threads',
+      metric: 'process.runtime.cpython.thread_count',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtInt,
+    },
+    // Generic process (covers Go / Node / anything that sets these)
+    {
+      label: 'Process CPU',
+      metric: 'process.cpu.utilization',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtPct,
+      warn: (v) => v > 0.8,
+    },
+    {
+      label: 'Process memory',
+      metric: 'process.memory.usage',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtBytes,
+    },
+  ];
+
+  /**
+   * P4: k8s / host infrastructure context. Only appears when the
+   * k8s cluster receiver or host metrics are feeding the dataset.
+   * Restarts fetch the delta in the window — the lifetime count is
+   * misleading; what matters is "did this number change". Memory
+   * limits/requests are gauges so we show the latest value.
+   */
+  const infraRows: MetricsCardRow[] = [
+    {
+      label: 'Restarts in window',
+      metric: 'k8s.container.restarts',
+      fetch: 'delta',
+      agg: 'max',
+      format: fmtInt,
+      warn: (v) => v > 0,
+      noSparkline: true,
+    },
+    {
+      label: 'Container ready',
+      metric: 'k8s.container.ready',
+      fetch: 'latest',
+      agg: 'avg',
+      format: (v) => (v >= 1 ? 'yes' : 'no'),
+      warn: (v) => v < 1,
+      noSparkline: true,
+    },
+    {
+      label: 'Pod phase',
+      metric: 'k8s.pod.phase',
+      fetch: 'latest',
+      agg: 'max',
+      // OTel k8s pod phase values: 1=pending, 2=running, 3=succeeded,
+      // 4=failed, 5=unknown. Treat anything other than running as warn.
+      format: (v) => {
+        if (v === 2) return 'running';
+        if (v === 1) return 'pending';
+        if (v === 4) return 'failed';
+        if (v === 3) return 'succeeded';
+        if (v === 5) return 'unknown';
+        return String(v);
+      },
+      warn: (v) => v !== 2,
+      noSparkline: true,
+    },
+    {
+      label: 'Memory limit',
+      metric: 'k8s.container.memory_limit',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtBytes,
+      noSparkline: true,
+    },
+    {
+      label: 'Memory request',
+      metric: 'k8s.container.memory_request',
+      fetch: 'latest',
+      agg: 'max',
+      format: fmtBytes,
+      noSparkline: true,
+    },
+    {
+      label: 'CPU limit',
+      metric: 'k8s.container.cpu_limit',
+      fetch: 'latest',
+      agg: 'max',
+      format: (v) => `${v.toFixed(2)} cores`,
+      noSparkline: true,
+    },
+  ];
 
   // Prepare chart series from buckets
   const chartSeries = useMemo(() => {
@@ -383,6 +705,41 @@ export default function ServiceDetailPage() {
           series={durSeries}
           yFormat={fmtUsAxis}
           emptyMessage={loadingBuckets ? 'Loading…' : 'No data'}
+        />
+      </div>
+
+      {/* Metric-backed cards: dependency latencies, runtime, infra.
+          Each card hides itself entirely when the service has no
+          data for any of its rows, so non-k8s services show two
+          cards, services without instrumented downstream calls
+          show one, and a fully-uninstrumented service shows none. */}
+      <div className={s.metricCards}>
+        <MetricsCard
+          title="Dependency latencies"
+          subtitle="p95 of outgoing calls by protocol"
+          rows={protocolRows}
+          service={serviceName}
+          range={range}
+          availableMetrics={serviceMetricSet}
+          seriesByMetric={cardSeriesByMetric}
+        />
+        <MetricsCard
+          title="Runtime health"
+          subtitle="Process / VM metrics from the instrumentation SDK"
+          rows={runtimeRows}
+          service={serviceName}
+          range={range}
+          availableMetrics={serviceMetricSet}
+          seriesByMetric={cardSeriesByMetric}
+        />
+        <MetricsCard
+          title="Infrastructure"
+          subtitle="Container + pod metrics from the k8s cluster receiver"
+          rows={infraRows}
+          service={serviceName}
+          range={range}
+          availableMetrics={serviceMetricSet}
+          seriesByMetric={cardSeriesByMetric}
         />
       </div>
 

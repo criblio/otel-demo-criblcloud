@@ -642,3 +642,344 @@ export function metricSampleRow(metricName: string): string {
     | where _metric == "${m}"
     | limit 1`;
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Spanmetrics-backed RED queries
+//
+// The OTel Collector's spanmetrics connector synthesizes two metrics
+// from every span it processes:
+//   - traces.span.metrics.calls    — monotonic counter
+//   - traces.span.metrics.duration — histogram, bucket bounds in ms
+// Both are tagged with at least (service.name, span.name, span.kind,
+// status.code) where status.code is one of STATUS_CODE_OK,
+// STATUS_CODE_ERROR, STATUS_CODE_UNSET.
+//
+// Using these for the Home catalog and Service Detail RED charts is
+// orders of magnitude cheaper than raw-span aggregation at scale.
+// Accuracy trade-off: `percentile(_value, N)` on the duration metric
+// is percentile-of-means — the collector pre-computes a mean per
+// export interval so we're aggregating over those means, not raw
+// observations. Directionally correct, not perfectly accurate. For
+// true histogram percentiles we'd need to parse the cumulative
+// bucket map in `${name}_data._buckets`, tracked as a v2 in the
+// ROADMAP.
+//
+// Counter rate semantics: rate over the window is derived from
+// `max(_value) - min(_value)` divided by the window length, with
+// resets handled by a max() aggregation (resets would make min()
+// spuriously low but the max-min difference stays close to the
+// true count unless the counter was reset DURING the window).
+//
+// Unit note: the duration histogram is emitted in milliseconds;
+// multiply by 1000 at the API layer to match the existing
+// microsecond-based ServiceSummary / ServiceBucket contract.
+// ─────────────────────────────────────────────────────────────────
+
+/** Build the metric-select WHERE clause used by every spanmetrics
+ * query, optionally scoped to a single service. */
+function spanmetricsBase(metric: string, service?: string): string {
+  const svcFilter = service
+    ? `| where tostring(['service.name'])=="${service.replace(/"/g, '\\"')}"`
+    : '';
+  return `${metricsBase()}
+    | where _metric == "${metric}"
+    | extend svc=tostring(['service.name']),
+             op=tostring(['span.name']),
+             status=tostring(['status.code'])
+    ${svcFilter}`;
+}
+
+/**
+ * Per-service RED summary from spanmetrics. Returns the same shape
+ * as the raw-span serviceSummary() — svc, requests, errors,
+ * error_rate, p50/95/99 in microseconds — so callers can swap
+ * sources without changing transform code.
+ *
+ * IMPORTANT: the spanmetrics calls counter is emitted per
+ * (service.name, span.name, span.kind, status.code) time series, so
+ * we MUST compute the max/min delta per tuple and then sum. Merging
+ * all tuples into one group and then doing max(_value)-min(_value)
+ * at the service level over-counts massively because max picks the
+ * biggest counter from the highest-volume op while min picks the
+ * smallest from a low-volume op, and the difference has no real
+ * meaning.
+ */
+export function spanmetricsServiceSummary(service?: string): string {
+  const svcFilter = service
+    ? `| where tostring(['service.name'])=="${service.replace(/"/g, '\\"')}"`
+    : '';
+  // Calls side: per-tuple deltas, then sum per service. `coalesce`
+  // the error count so services with zero errors land at 0 instead
+  // of the null that `sumif` returns on empty input.
+  const calls = `${metricsBase()}
+    | where _metric == "traces.span.metrics.calls"
+    | extend svc=tostring(['service.name']),
+             op=tostring(['span.name']),
+             status=tostring(['status.code'])
+    ${svcFilter}
+    | summarize delta=max(toreal(_value))-min(toreal(_value))
+      by svc, op, status
+    | summarize requests=sum(delta),
+                errors_raw=sumif(delta, status=="STATUS_CODE_ERROR")
+      by svc
+    | extend errors=iff(isnull(errors_raw), 0.0, toreal(errors_raw))
+    | extend error_rate=iff(requests>0, errors/toreal(requests), 0.0)`;
+  // Duration side — percentile-of-means on the histogram's _value
+  // (which is the per-export mean the spanmetrics connector computes).
+  // We multiply by 1000 to convert ms → µs.
+  const duration = `${metricsBase()}
+    | where _metric == "traces.span.metrics.duration"
+    | extend svc=tostring(['service.name'])
+    ${svcFilter}
+    | summarize p50_us=percentile(toreal(_value), 50)*1000,
+                p95_us=percentile(toreal(_value), 95)*1000,
+                p99_us=percentile(toreal(_value), 99)*1000
+      by svc`;
+  return `${calls}
+    | join kind=leftouter (${duration}) on svc
+    | project svc, requests, errors, error_rate, p50_us, p95_us, p99_us
+    | sort by requests desc`;
+}
+
+/**
+ * Per-service bucketed RED time series from spanmetrics. Shape
+ * matches the raw-span serviceTimeSeries() so existing transform
+ * code works unchanged.
+ *
+ * Rate per bucket = max(_value) - min(_value) within the bucket on
+ * the calls counter. Error counts are split out by status at the
+ * same bucket/svc grouping level.
+ */
+export function spanmetricsServiceTimeSeries(
+  binSeconds: number,
+  service?: string,
+): string {
+  const svcFilter = service
+    ? `| where tostring(['service.name'])=="${service.replace(/"/g, '\\"')}"`
+    : '';
+  // Per-tuple delta first so cross-operation counter values don't get
+  // conflated; then sum per (svc, bucket) and coalesce nulls.
+  const calls = `${metricsBase()}
+    | where _metric == "traces.span.metrics.calls"
+    | extend svc=tostring(['service.name']),
+             op=tostring(['span.name']),
+             status=tostring(['status.code'])
+    ${svcFilter}
+    | summarize delta=max(toreal(_value))-min(toreal(_value))
+      by svc, op, status, bucket=bin(_time, ${binSeconds}s)
+    | summarize requests=sum(delta),
+                errors_raw=sumif(delta, status=="STATUS_CODE_ERROR")
+      by svc, bucket
+    | extend errors=iff(isnull(errors_raw), 0.0, toreal(errors_raw))`;
+  const duration = `${metricsBase()}
+    | where _metric == "traces.span.metrics.duration"
+    | extend svc=tostring(['service.name'])
+    ${svcFilter}
+    | summarize p50_us=percentile(toreal(_value), 50)*1000,
+                p95_us=percentile(toreal(_value), 95)*1000,
+                p99_us=percentile(toreal(_value), 99)*1000
+      by svc, bucket=bin(_time, ${binSeconds}s)`;
+  return `${calls}
+    | join kind=leftouter (${duration}) on svc, bucket
+    | project svc, bucket, requests, errors, p50_us, p95_us, p99_us
+    | sort by svc asc, bucket asc`;
+}
+
+/**
+ * Per-operation RED for a single service from spanmetrics. Shape
+ * matches serviceOperations() so the Service Detail top-operations
+ * table works unchanged.
+ */
+export function spanmetricsServiceOperations(service: string): string {
+  const svc = service.replace(/"/g, '\\"');
+  // (name, status) is already the per-tuple granularity here since
+  // we're scoped to one service — one span.name with one status
+  // value is a single time series. Coalesce null errors to 0.
+  const calls = `${metricsBase()}
+    | where _metric == "traces.span.metrics.calls"
+    | extend svc=tostring(['service.name']),
+             name=tostring(['span.name']),
+             status=tostring(['status.code'])
+    | where svc=="${svc}"
+    | summarize delta=max(toreal(_value))-min(toreal(_value))
+      by name, status
+    | summarize requests=sum(delta),
+                errors_raw=sumif(delta, status=="STATUS_CODE_ERROR")
+      by name
+    | extend errors=iff(isnull(errors_raw), 0.0, toreal(errors_raw))
+    | extend error_rate=iff(requests>0, errors/toreal(requests), 0.0)`;
+  const duration = `${metricsBase()}
+    | where _metric == "traces.span.metrics.duration"
+    | extend svc=tostring(['service.name']),
+             name=tostring(['span.name'])
+    | where svc=="${svc}"
+    | summarize p50_us=percentile(toreal(_value), 50)*1000,
+                p95_us=percentile(toreal(_value), 95)*1000,
+                p99_us=percentile(toreal(_value), 99)*1000
+      by name`;
+  return `${calls}
+    | join kind=leftouter (${duration}) on name
+    | project name, requests, errors, error_rate, p50_us, p95_us, p99_us
+    | sort by requests desc
+    | limit 50`;
+}
+
+/**
+ * Presence probe: returns one row if the spanmetrics connector is
+ * feeding the dataset. Called once at startup and cached so later
+ * queries don't have to re-detect.
+ */
+export function spanmetricsPresence(): string {
+  return `${metricsBase()}
+    | where _metric == "traces.span.metrics.calls"
+    | limit 1
+    | project _metric`;
+}
+
+// Silence unused-export lint for the helper that's only used from
+// within this module — keeping spanmetricsBase as a hook for
+// future cards that want to extend the spanmetrics query pattern.
+void spanmetricsBase;
+
+// ─────────────────────────────────────────────────────────────────
+// Service Detail: protocol / runtime / infra cards
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * List every metric the given service emits. Drives the
+ * auto-detection logic for the Service Detail cards — we don't
+ * want to query a protocol/runtime/infra metric if the service
+ * isn't emitting it. Scoped by both `service.name` and
+ * `k8s.deployment.name` so the k8s-cluster-receiver metrics
+ * (which don't set service.name) are also picked up.
+ *
+ * Note: Cribl KQL doesn't accept `tostring(...)==X or tostring(...)==Y`
+ * inline — it can't parse the OR of two function expressions. We
+ * have to `extend` the columns first, then filter. Same pattern
+ * in the other per-service queries below.
+ */
+export function listServiceMetrics(service: string): string {
+  const s = service.replace(/"/g, '\\"');
+  return `${metricsBase()}
+    | extend svc=tostring(['service.name']),
+             dep=tostring(['k8s.deployment.name'])
+    | where svc == "${s}" or dep == "${s}"
+    | summarize samples=count() by _metric
+    | sort by samples desc
+    | limit 500`;
+}
+
+/**
+ * Latest-value query for a single metric scoped to a service.
+ * Uses the same service-name-or-k8s-deployment-name fallback as
+ * listServiceMetrics so k8s cluster metrics (which have null
+ * service.name) still correlate back to app services by deployment
+ * name. Returns one row with the most recent _value in the window.
+ */
+export function serviceMetricLatest(
+  service: string,
+  metric: string,
+): string {
+  const s = service.replace(/"/g, '\\"');
+  const m = metric.replace(/"/g, '\\"');
+  return `${metricsBase()}
+    | where _metric == "${m}"
+    | extend svc=tostring(['service.name']),
+             dep=tostring(['k8s.deployment.name'])
+    | where svc == "${s}" or dep == "${s}"
+    | sort by _time desc
+    | limit 1
+    | project val=toreal(_value)`;
+}
+
+/**
+ * Delta query for a cumulative counter scoped to a service over
+ * the current window. Used by the "restarts in the window" display
+ * where what matters is "did this number change" not "what is the
+ * lifetime value". Per-time-series delta (by pod/container) to
+ * avoid the same mis-aggregation bug spanmetrics hit.
+ */
+export function serviceMetricDelta(
+  service: string,
+  metric: string,
+): string {
+  const s = service.replace(/"/g, '\\"');
+  const m = metric.replace(/"/g, '\\"');
+  return `${metricsBase()}
+    | where _metric == "${m}"
+    | extend svc=tostring(['service.name']),
+             dep=tostring(['k8s.deployment.name']),
+             pod=tostring(['k8s.pod.name']),
+             container=tostring(['k8s.container.name'])
+    | where svc == "${s}" or dep == "${s}"
+    | summarize d=max(toreal(_value))-min(toreal(_value))
+      by pod, container
+    | summarize delta=sum(d)`;
+}
+
+/**
+ * Time-series for a service metric with the same service matching
+ * fallback as listServiceMetrics. Used by the runtime/infra/protocol
+ * cards to populate their sparklines. Returns (bucket, val) rows
+ * where val is percentile(_value, 95) for histogram-like metrics,
+ * or the aggregation the caller picks.
+ */
+export function serviceMetricTimeSeries(
+  service: string,
+  metric: string,
+  binSeconds: number,
+  agg: 'avg' | 'max' | 'p95' = 'p95',
+): string {
+  const s = service.replace(/"/g, '\\"');
+  const m = metric.replace(/"/g, '\\"');
+  let aggExpr: string;
+  if (agg === 'p95') {
+    aggExpr = 'percentile(toreal(_value), 95)';
+  } else if (agg === 'max') {
+    aggExpr = 'max(toreal(_value))';
+  } else {
+    aggExpr = 'avg(toreal(_value))';
+  }
+  return `${metricsBase()}
+    | where _metric == "${m}"
+    | extend svc=tostring(['service.name']),
+             dep=tostring(['k8s.deployment.name'])
+    | where svc == "${s}" or dep == "${s}"
+    | summarize val=${aggExpr} by bucket=bin(_time, ${binSeconds}s)
+    | sort by bucket asc`;
+}
+
+/**
+ * Batched time-series: fetch (metric, bucket) → value for multiple
+ * metrics in a single query. Used by the Service Detail page to
+ * collapse 15+ per-row fetches on the Protocol/Runtime/Infrastructure
+ * cards into one round trip. Saturating the Cribl search worker pool
+ * with per-row fetches queued each request for 30+ seconds behind
+ * the others; batching eliminates that entirely.
+ *
+ * Returns rows shaped as (metric, bucket, val), where val is
+ * percentile(_value, 95) — a reasonable default for both histograms
+ * (the spanmetrics/OTel histograms report means, so p95-of-means is
+ * effectively max-of-means) and gauges (p95 of a gauge is close to
+ * its peak). Callers that need a different aggregation per metric
+ * can still fire the single-metric query.
+ */
+export function serviceMetricsBatch(
+  service: string,
+  metrics: string[],
+  binSeconds: number,
+): string {
+  const s = service.replace(/"/g, '\\"');
+  // Dedupe + quote-escape
+  const metricList = Array.from(new Set(metrics))
+    .map((m) => `"${m.replace(/"/g, '\\"')}"`)
+    .join(', ');
+  return `${metricsBase()}
+    | where _metric in (${metricList})
+    | extend svc=tostring(['service.name']),
+             dep=tostring(['k8s.deployment.name'])
+    | where svc == "${s}" or dep == "${s}"
+    | summarize val=percentile(toreal(_value), 95)
+      by metric=_metric, bucket=bin(_time, ${binSeconds}s)
+    | sort by metric asc, bucket asc`;
+}
