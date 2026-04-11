@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import StatusBanner from '../components/StatusBanner';
 import { saveAppSettings } from '../api/appSettings';
 import { setCurrentDataset } from '../api/dataset';
+import { setStreamFilterEnabled } from '../api/streamFilter';
 import { useDataset } from '../hooks/useDataset';
+import { useStreamFilterEnabled } from '../hooks/useStreamFilter';
 import s from './SettingsPage.module.css';
 
 /**
@@ -25,10 +27,12 @@ const DATASET_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 export default function SettingsPage() {
   const currentDataset = useDataset();
+  const currentStreamFilter = useStreamFilterEnabled();
   const [draft, setDraft] = useState<string>(currentDataset);
   const [saving, setSaving] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [streamFilterSaving, setStreamFilterSaving] = useState(false);
 
   // Sync draft when the current dataset updates externally (e.g. first
   // KV load finishes after page mount).
@@ -68,6 +72,24 @@ export default function SettingsPage() {
     setDraft(currentDataset);
     setError(null);
     setFlash(null);
+  }
+
+  async function handleStreamFilterToggle(next: boolean) {
+    if (streamFilterSaving) return;
+    setStreamFilterSaving(true);
+    setError(null);
+    try {
+      // Apply locally first so the page re-fetches immediately; persist
+      // in the background. If the PUT fails, roll back the in-memory
+      // state to match what was last loaded.
+      setStreamFilterEnabled(next);
+      await saveAppSettings({ filterLongPollTraces: next });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setStreamFilterEnabled(!next);
+    } finally {
+      setStreamFilterSaving(false);
+    }
   }
 
   return (
@@ -155,6 +177,34 @@ export default function SettingsPage() {
           </button>
           {flash && <span className={s.successFlash}>{flash}</span>}
         </div>
+      </div>
+
+      <div className={s.card}>
+        <h2 className={s.sectionTitle}>Noise filters</h2>
+        <p className={s.sectionHelp}>
+          Heuristics that hide traces which are long but not actionable —
+          persistent gRPC streams (e.g. flagd.evaluation <code>/EventStream</code>),
+          SSE / websocket long-polls, and kafka-consumer idle-wait loops.
+          Default on. Turn off if you want to see those traces in the Home
+          Slowest panel or Search results.
+        </p>
+
+        <label className={s.toggleRow}>
+          <input
+            type="checkbox"
+            checked={currentStreamFilter}
+            disabled={streamFilterSaving}
+            onChange={(e) => void handleStreamFilterToggle(e.target.checked)}
+          />
+          <div>
+            <div className={s.toggleTitle}>Hide long-poll / idle-wait traces</div>
+            <div className={s.toggleSub}>
+              Filters traces where no child span accounts for at least 10% of the
+              total duration and the trace is longer than 30s. Affects Home Slowest
+              trace classes, Search results, and Service Detail panels.
+            </div>
+          </div>
+        </label>
       </div>
     </div>
   );

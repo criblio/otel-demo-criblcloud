@@ -5,6 +5,7 @@ import { DEFAULT_SEARCH_STATE, type SearchFormState } from '../components/search
 import TraceTable from '../components/TraceTable';
 import StatusBanner from '../components/StatusBanner';
 import { findTraces } from '../api/search';
+import { useStreamFilterEnabled } from '../hooks/useStreamFilter';
 import type { TraceSummary } from '../api/types';
 
 function fromQueryString(params: URLSearchParams): SearchFormState {
@@ -38,6 +39,7 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const streamFilterEnabled = useStreamFilterEnabled();
 
   const runSearch = useCallback(async (state: SearchFormState) => {
     setLoading(true);
@@ -77,6 +79,16 @@ export default function SearchPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Re-run the current search whenever the user flips the long-poll
+  // trace filter so the table reflects the new setting immediately.
+  // Only fires after an initial search has been performed.
+  useEffect(() => {
+    if (hasSearched && formState.service) {
+      void runSearch(formState);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamFilterEnabled]);
 
   function handleSubmit(next: SearchFormState) {
     setFormState(next);

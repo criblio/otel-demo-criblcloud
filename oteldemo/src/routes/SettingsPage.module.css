@@ -176,3 +176,28 @@
   border-color: var(--cds-color-accent);
   font-weight: var(--cds-font-weight-semibold);
 }
+
+.toggleRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--cds-space-md);
+  padding: var(--cds-space-sm) 0;
+  cursor: pointer;
+}
+.toggleRow input[type='checkbox'] {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--cds-color-accent);
+  cursor: pointer;
+}
+.toggleTitle {
+  font-size: var(--cds-font-size-base);
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+}
+.toggleSub {
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-muted);
+  margin-top: 2px;
+}

@@ -9,6 +9,12 @@ export const SETTINGS_KEY = 'settings/app';
 
 export interface AppSettings {
   dataset?: string;
+  /**
+   * When true, Home "Slowest trace classes" and Search results hide
+   * long-poll / idle-wait traces (see api/streamFilter.ts). Default
+   * true; stored here so the user's choice persists across sessions.
+   */
+  filterLongPollTraces?: boolean;
   [k: string]: unknown;
 }
 

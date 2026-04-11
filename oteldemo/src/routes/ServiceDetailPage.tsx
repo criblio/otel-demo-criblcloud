@@ -15,6 +15,7 @@ import {
 import { serviceColor } from '../utils/spans';
 import { previousWindow } from '../utils/timeRange';
 import { useRangeParam } from '../hooks/useRangeParam';
+import { useStreamFilterEnabled } from '../hooks/useStreamFilter';
 import DeltaChip from '../components/DeltaChip';
 import type {
   ServiceSummary,
@@ -85,6 +86,9 @@ export default function ServiceDetailPage() {
   const [loadingDeps, setLoadingDeps] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
+  // Trigger a re-fetch when the Settings stream-filter toggle changes,
+  // so the Recent errors panel doesn't keep stale server-filtered data.
+  const streamFilterEnabled = useStreamFilterEnabled();
 
   const fetchAll = useCallback(async () => {
     setError(null);
@@ -136,7 +140,11 @@ export default function ServiceDetailPage() {
       .then((e) => setEdges(e))
       .catch(() => setEdges([]))
       .finally(() => setLoadingDeps(false));
-  }, [range, serviceName]);
+    // streamFilterEnabled is intentionally in the dep list so flipping
+    // the toggle in Settings triggers a re-fetch. It isn't read inside
+    // the callback — the queries pick it up from module state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range, serviceName, streamFilterEnabled]);
 
   useEffect(() => {
     void fetchAll();

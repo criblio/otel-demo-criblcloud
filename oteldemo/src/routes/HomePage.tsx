@@ -15,6 +15,7 @@ import { serviceColor } from '../utils/spans';
 import { serviceHealth, healthRowBg } from '../utils/health';
 import { previousWindow } from '../utils/timeRange';
 import { useRangeParam } from '../hooks/useRangeParam';
+import { useStreamFilterEnabled } from '../hooks/useStreamFilter';
 import DeltaChip from '../components/DeltaChip';
 import type {
   ServiceSummary,
@@ -103,6 +104,10 @@ export default function HomePage() {
   const [sort, setSort] = useState<SortState>({ key: 'requests', dir: 'desc' });
   // Lazy initializer keeps Date.now() out of the render body (purity rule).
   const [lastRefresh, setLastRefresh] = useState<number>(() => Date.now());
+  // Subscribing to the stream-filter toggle so the page re-fetches
+  // when the user flips it in Settings. The value isn't used directly
+  // in render; it just needs to be in fetchAll's dep list below.
+  const streamFilterEnabled = useStreamFilterEnabled();
 
   const fetchAll = useCallback(async () => {
     setError(null);
@@ -146,7 +151,13 @@ export default function HomePage() {
 
     await Promise.allSettled([pSummaries, pPrevSummaries, pBuckets, pSlow, pErrors]);
     setLastRefresh(Date.now());
-  }, [range]);
+    // streamFilterEnabled is intentionally in the dep list — the
+    // queries pick it up from module state at build time, but the
+    // callback itself doesn't reference it. Including it here gives
+    // the useEffect below a fresh `fetchAll` identity when the user
+    // toggles the filter in Settings, which triggers a re-fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range, streamFilterEnabled]);
 
   // Initial load + on range change
   useEffect(() => {

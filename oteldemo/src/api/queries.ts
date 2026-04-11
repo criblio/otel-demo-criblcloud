@@ -8,6 +8,7 @@
  * Spans are identified by isnotnull(end_time_unix_nano).
  */
 import { getCurrentDataset } from './dataset';
+import { streamFilterKqlClause } from './streamFilter';
 
 function quoteDataset(): string {
   // The dataset name must be a simple identifier to embed safely as
@@ -210,18 +211,26 @@ export function serviceOperations(service: string): string {
 
 /**
  * Traces sorted by trace duration descending — "slow traces" panel on
- * the Home page. Optionally scoped to a service.
+ * the Home page. Optionally scoped to a service. Applies the same
+ * long-poll / idle-wait filter as rawSlowestTraces() — see
+ * api/streamFilter.ts.
  */
 export function slowestTraces(service?: string): string {
   const svcFilter = service ? `| where svc=="${service.replace(/"/g, '\\"')}"` : '';
   return `${spansBase()}
-    | extend svc=tostring(resource.attributes['service.name'])
+    | extend svc=tostring(resource.attributes['service.name']),
+            parent=tostring(parent_span_id),
+            is_root=(parent=="" or isempty(parent)),
+            dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0
     ${svcFilter}
-    | summarize first_seen=min(_time),
+    | summarize span_count=count(),
+                first_seen=min(_time),
                 trace_start_ns=min(start_time_unix_nano),
-                trace_end_ns=max(end_time_unix_nano)
+                trace_end_ns=max(end_time_unix_nano),
+                max_non_root_dur_us=maxif(dur_us, is_root == false)
       by trace_id
     | extend trace_dur_us=(toreal(trace_end_ns)-toreal(trace_start_ns))/1000.0
+    ${streamFilterKqlClause()}
     | sort by trace_dur_us desc
     | limit 20`;
 }
@@ -238,42 +247,31 @@ export function slowestTraces(service?: string): string {
  * among rows satisfying the predicate, which for a single-root trace is
  * just "the root span's value."
  *
- * Streaming / long-poll noise filter: persistent connections (gRPC
- * server-streaming, SSE, websockets, HTTP long-poll) produce traces
- * that sit at multi-minute durations but contain **only one or two
- * spans** — the connection-holding RPC and maybe one internal scope
- * span. A legitimate slow trace accumulates spans as it works
- * (client → server → downstream rpc → db → ...), so
- * `span_count >= 3` is a clean separator.
- *
- * We empirically verified this against the OTel demo: every
- * `flagd.evaluation.v1.Service/EventStream` trace in the dataset has
- * span_count ∈ {1, 2}, while real slow traces from `kafkaQueueProblems`
- * (`accounting order-consumed`) all have span_count ≥ 3. The filter
- * is environment-agnostic — it doesn't reference any service or
- * operation name.
- *
- * Threshold: span_count ≤ 2 AND duration > 30s. 30s is generous enough
- * to keep any normal slow-but-real request while still catching every
- * long-poll we've seen.
+ * Long-poll / idle-wait filter: see api/streamFilter.ts for the full
+ * rationale. In short, traces dominated by root self-time (no single
+ * child accounts for a meaningful fraction of the duration) are either
+ * persistent streaming connections or idle consumer-poll loops — in
+ * both cases they can't be diagnosed from trace data so we hide them.
+ * Controlled by a user setting, default on. The query always computes
+ * `max_non_root_dur_us` so the filter clause can be appended or not
+ * without changing the summarize shape.
  */
-const STREAM_MIN_SPANS = 3;
-const STREAM_DURATION_US = 30_000_000;
-
 export function rawSlowestTraces(limit: number = 500): string {
   return `${spansBase()}
     | extend svc=tostring(resource.attributes['service.name']),
             parent=tostring(parent_span_id),
-            is_root=(parent=="" or isempty(parent))
+            is_root=(parent=="" or isempty(parent)),
+            dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0
     | summarize span_count=count(),
                 trace_start_ns=min(start_time_unix_nano),
                 trace_end_ns=max(end_time_unix_nano),
+                max_non_root_dur_us=maxif(dur_us, is_root == false),
                 root_svc=minif(svc, is_root),
                 root_op=minif(name, is_root)
       by trace_id
     | extend trace_dur_us=(toreal(trace_end_ns)-toreal(trace_start_ns))/1000.0
     | where isnotnull(root_svc)
-    | where not (span_count < ${STREAM_MIN_SPANS} and trace_dur_us > ${STREAM_DURATION_US})
+    ${streamFilterKqlClause()}
     | sort by trace_dur_us desc
     | limit ${limit}`;
 }
