@@ -11,6 +11,7 @@ import {
   listSlowTraceClasses,
   listErrorClasses,
 } from '../api/search';
+import { listCachedHomePanels } from '../api/panelCache';
 import { serviceColor } from '../utils/spans';
 import { serviceHealth, healthRowBg } from '../utils/health';
 import { previousWindow } from '../utils/timeRange';
@@ -132,8 +133,59 @@ export default function HomePage() {
     setLoadingSlow(true);
     setLoadingErrors(true);
 
-    // Fan out — we want the table to populate as soon as summaries arrive,
-    // and the sparklines + bottom panels to fill in independently.
+    // Previous window of the same length — fuels the delta-vs-baseline
+    // chips. Failure here is non-fatal; we just skip the chips. Fired
+    // unconditionally because it's not part of the cacheable set
+    // (the prior window changes with every user range pick).
+    const prev = previousWindow(range);
+    const pPrevSummaries = listServiceSummaries(prev.earliest, prev.latest)
+      .then((r) => setPrevSummaries(r))
+      .catch(() => setPrevSummaries([]));
+
+    // Cache-fast path: when the user is on the default -1h range,
+    // try a single batched $vt_results read for all four panels
+    // before firing the live queries. A full cache hit returns
+    // ~1 s end-to-end instead of the 8-15 s the live path needs.
+    // Any miss (cache not populated, scheduled search hasn't run,
+    // partial panel failure) transparently falls through to the
+    // live queries.
+    //
+    // Stream-filter state is baked into the scheduled queries at
+    // provision time, so when the user toggles the stream filter
+    // we skip the cache too — otherwise they'd see stale filtered
+    // data until the next scheduled run + re-provision.
+    if (range === '-1h' && streamFilterEnabled) {
+      try {
+        const cached = await listCachedHomePanels();
+        if (
+          cached.serviceSummaries &&
+          cached.serviceBuckets &&
+          cached.slowClasses &&
+          cached.errorClasses
+        ) {
+          setSummaries(cached.serviceSummaries);
+          setBuckets(cached.serviceBuckets);
+          setSlowClasses(cached.slowClasses);
+          setErrorClasses(cached.errorClasses);
+          setLoadingSummaries(false);
+          setLoadingBuckets(false);
+          setLoadingSlow(false);
+          setLoadingErrors(false);
+          // Don't await the prev summary here — let it resolve in
+          // the background and light up the delta chips when it
+          // lands. The main catalog is already usable.
+          setLastRefresh(Date.now());
+          return;
+        }
+      } catch {
+        // Cache read failed — fall through to live fetch. Common on
+        // fresh installs before the first scheduled run lands.
+      }
+    }
+
+    // Fan out live queries — either because the user picked a
+    // non-default range, flipped off the stream filter, or because
+    // the cache came back empty.
     const pSummaries = listServiceSummaries(range, 'now')
       .then((r) => setSummaries(r))
       .catch((e: unknown) => {
@@ -141,13 +193,6 @@ export default function HomePage() {
         setSummaries([]);
       })
       .finally(() => setLoadingSummaries(false));
-
-    // Previous window of the same length — fuels the delta-vs-baseline
-    // chips. Failure here is non-fatal; we just skip the chips.
-    const prev = previousWindow(range);
-    const pPrevSummaries = listServiceSummaries(prev.earliest, prev.latest)
-      .then((r) => setPrevSummaries(r))
-      .catch(() => setPrevSummaries([]));
 
     const pBuckets = getServiceTimeSeries(binSeconds, undefined, range, 'now')
       .then((r) => setBuckets(r))
@@ -166,12 +211,9 @@ export default function HomePage() {
 
     await Promise.allSettled([pSummaries, pPrevSummaries, pBuckets, pSlow, pErrors]);
     setLastRefresh(Date.now());
-    // streamFilterEnabled is intentionally in the dep list — the
-    // queries pick it up from module state at build time, but the
-    // callback itself doesn't reference it. Including it here gives
-    // the useEffect below a fresh `fetchAll` identity when the user
-    // toggles the filter in Settings, which triggers a re-fetch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // streamFilterEnabled is in the dep list so (a) flipping the
+    // toggle triggers a re-fetch and (b) the cache-fast path
+    // above reads the current value directly.
   }, [range, streamFilterEnabled]);
 
   // Initial load + on range change
