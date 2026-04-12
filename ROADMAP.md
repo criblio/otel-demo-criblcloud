@@ -99,55 +99,214 @@ evaluation, stores metadata so the Alerts page can render it. And
 for SLOs: a scheduled search that tracks error budget over a rolling
 28-day window.
 
-#### 2a. Research tasks (do these first — they determine the shape)
+#### 2a. Research tasks — **mostly done**
 
-- **Saved search provisioning API.** What Cribl Search REST endpoints
-  exist for creating / updating / deleting saved searches? What's the
-  auth context inside a Cribl App sandbox iframe — can the app make
-  authenticated calls to the control-plane API the same way it makes
-  KV calls, or is there a separate endpoint? Document the schema of a
-  saved search definition (query, schedule expression, output target).
-- **Scheduled-search execution model.** How does Cribl execute a
-  scheduled search? Where do the results land — in a dedicated
-  dataset, a KV key, an event table, something like Splunk's
-  `$vt_results$` summary indexing? How long are results retained?
-- **Result persistence target.** Three candidates worth comparing:
-  1. **Pack-scoped KV store** — cheapest, already in use for app
-     settings. Writable from both the app and presumably from a
-     scheduled search's output stage. Best for small results (a few
-     hundred baseline rows).
-  2. **Cribl lookups** — named tabular references that any KQL query
-     can join against. Best if baselines need to be queryable from
-     other saved searches.
-  3. **Dedicated `otel_baselines` dataset** — if Cribl Search supports
-     a scheduled search writing to a separate dataset, this scales
-     best and stays queryable without app mediation.
-- **Install-time hook on the Cribl App Platform.** Does the platform
-  support a "run this script when the pack is installed" hook (like a
-  Kubernetes operator or a Helm `post-install` job)? If yes, document
-  it and use it. If no, flag that as a **platform request** to the
-  Cribl team and design a first-run workflow instead.
-- **Idempotency + upgrade path.** How do we name provisioned searches
-  so we can find and update them on subsequent installs without
-  stomping user edits? Tag-based naming (`traceexplorer:baseline:op`)
-  feels right. How do we handle schema migrations when a new app
-  version needs a different baseline shape?
+Detailed findings in
+[`docs/research/cribl-saved-searches.md`](docs/research/cribl-saved-searches.md).
+The REST surface, persistence mechanism, POST shape, notification
+target collection, and idempotent-naming path are all resolved.
+The only remaining partial item — the platform install-time hook —
+does not block implementation.
 
-#### 2b. Durable baseline for latency anomaly detection
+- ✅ **RESOLVED — Saved search provisioning API.** Cribl Search
+  exposes `/api/v1/m/default_search/search/saved` (list, create),
+  `/search/saved/:id` (get, patch, delete),
+  `/search/saved/:id/notifications` (create notification),
+  `/search/saved/:id/notifications/:nid` (patch, delete). Full
+  schema captured from live examples including `schedule`, `cron`,
+  `keepLastN`, and nested `notifications.items[]` with
+  `triggerType/triggerComparator/triggerCount` + `targets` +
+  message templating. **One API covers saved searches AND
+  scheduled searches AND alerts** — there is no separate alert
+  system. **No TypeScript SDK for Cribl Search saved searches**
+  exists yet; the official `cribl-control-plane` and
+  `cribl-mgmt-plane` SDKs are Stream/Workspace-focused.
+- ✅ **RESOLVED — Auth context inside the pack iframe.** The
+  platform fetch proxy injects the user's Auth0 Bearer JWT
+  automatically on any call to `CRIBL_API_URL`. Same mechanism
+  we already use for `/search/jobs` → works unchanged for
+  `/search/saved/*`. No new auth plumbing needed.
+- ✅ **RESOLVED — Scheduled-search result persistence.** Three
+  mechanisms confirmed via [docs.cribl.io](https://docs.cribl.io)
+  and live probes:
+  1. **`$vt_results`** — every scheduled run is automatically
+     retained for 7 days (configurable). Read via
+     `dataset="$vt_results" jobName="my_search"`. Free write,
+     but reads run another search job (credit-charged).
+  2. **`export mode=overwrite to lookup`** — explicit at the end
+     of a scheduled query, materializes output to a workspace
+     lookup CSV. Read via `lookup x on k1, k2` — hash-join,
+     sub-millisecond overhead. Hard 10k-row cap. Admin/Editor
+     only.
+  3. **`| send`** — streams results through a Cribl HTTP Source
+     back into Stream for downstream storage. No row cap, heavier
+     setup, destination-specific retention.
+
+  **Recommendation**: use `export mode=overwrite to lookup` for
+  the op-baseline case. Baselines are small (~100–1,000 rows,
+  well under 10k), and the critical path is **read speed** —
+  lookup hash-join is effectively free compared to a `$vt_results`
+  read which would add another search job per Home page load.
+  `$vt_results` stays as a fallback if we hit the 10k cap.
+- ✅ **RESOLVED — POST create.** Verified by live round-trip.
+  Minimum body: `{id, name, query, earliest, latest}`.
+  Client-chosen `id` is respected — directly enables idempotent
+  naming without a list-then-diff dance. Response is the
+  `{items:[<created>], count:1}` wrapper. GET-then-DELETE
+  round-trip verified clean.
+- 🟡 **PARTIAL — `/search/saved/:id/results` HTTP endpoint.** Still
+  404s for `tailscale_offline`. **Not blocking §2b**: the
+  canonical read path for scheduled search output is
+  `dataset="$vt_results" jobName=...`, and `export to lookup`
+  sidesteps the question entirely.
+- 🟡 **PARTIAL — Install-time hook on the App Platform.** Still
+  unconfirmed. File as a platform feature request. Design
+  around a first-run dialog in §2e for now.
+- ✅ **RESOLVED — Notification targets.** Top-level cross-product
+  endpoint at `GET /api/v1/notification-targets` (not under
+  `/m/default_search/`). A target created in Stream/Edge/Search
+  is visible from all products. UI path:
+  `Settings > Search > Notification Targets`. Supported types:
+  `bulletin_message` (system messages), `webhook`, `slack`,
+  `pagerduty`, `sns`, `email`. Referenced from a saved search's
+  `schedule.notifications.items[].targets[]` by ID.
+- ✅ **RESOLVED — Idempotent naming + upgrade path.** Confirmed
+  by live probe: POST body's `id` is respected verbatim by the
+  server. Convention: prefix every app-managed ID with
+  `traceexplorer__`. The list endpoint's response is filterable
+  client-side (lib field distinguishes built-ins from user
+  rows). Upgrade path: store a `traceexplorer__provisioned_version`
+  KV key on success; re-run migrations when the stored version
+  differs from the packaged version. Never touch rows whose ID
+  doesn't match our prefix.
+
+**Detailed research notes** live in
+[`docs/research/cribl-saved-searches.md`](docs/research/cribl-saved-searches.md),
+including the full saved-search schema, live-example JSON, the
+three persistence mechanisms side-by-side, and the example
+baseline-scheduled-search KQL.
+
+**Remaining research is not blocking**:
+
+1. File a Cribl platform feature request for an install-time
+   hook if confirmed missing.
+2. Re-visit `/search/saved/:id/results` if we ever need the HTTP
+   endpoint directly (we don't for §2b, but we might for §2c
+   "show recent alert firings" UI).
+
+#### 2b. Durable baselines + panel caching (via scheduled searches)
+
+Two distinct use cases ride on the same provisioning pipeline,
+with two different persistence mechanisms picked by what each
+read path needs.
+
+##### 2b.1. Latency anomaly baselines → `export to lookup`
 
 Replaces the in-memory 24h baseline in `listOperationAnomalies`:
 
-- A scheduled search runs every N minutes, computing per-(service,
-  operation) p50/p95/p99 over a rolling baseline window (7 days,
-  excluding the most recent hour so fresh incidents don't pollute
-  the baseline)
-- Results persist to the chosen target (KV / lookup / dataset)
-- The app reads the latest baseline row on page load — one cheap
-  lookup instead of a 24h span aggregation — and compares against
-  the current window
-- Gracefully degrades: if the baseline hasn't been populated yet
-  (first run, upgrade), fall back to the current in-memory 24h
-  approximation
+- A scheduled search runs hourly (or more often), computing
+  per-(service, operation) p50/p95/p99 over a rolling 24h
+  baseline window, then ends with
+  `| export mode=overwrite description="..." to lookup traceexplorer_op_baselines`
+- The anomaly query reads via `| lookup traceexplorer_op_baselines
+  on svc, op` — a hash-join against a workspace-scoped CSV,
+  sub-millisecond overhead
+- Gracefully degrades: if the lookup doesn't exist yet (fresh
+  install, first run), show "baselines still being computed"
+  empty state
+
+Why lookup and not `$vt_results` here: baselines are a **join
+target**, not a primary result. Live anomaly detection needs to
+cross-reference hundreds of current-window ops against their
+baselines in one query. `lookup on key` is designed for exactly
+that and runs nearly free; `$vt_results` would require
+cross-joining with more indirection.
+
+##### 2b.2. Home + System Architecture panel caching → `$vt_results`
+
+Makes the Home catalog and System Architecture views feel snappy
+by precomputing the expensive queries on a cron and serving
+cached rows on every page load.
+
+**Mechanism**: every saved search's latest run is automatically
+retained in `$vt_results` for 7 days. A cached panel is just a
+read: `dataset="$vt_results" jobName="traceexplorer__panel_name"`.
+No explicit `| export` step, no role restrictions, no 10k row
+cap to worry about for time-series.
+
+**The killer optimization**: `jobName` accepts an **array**.
+```kql
+dataset="$vt_results"
+  jobName=["traceexplorer__home_service_summary",
+           "traceexplorer__home_service_time_series",
+           "traceexplorer__home_slow_traces",
+           "traceexplorer__home_error_spans"]
+```
+This returns all four cached panels in **one** search job. Each
+row comes back auto-tagged with `jobName`, so the client just
+partitions the result stream by that column and hands each
+partition to its panel.
+
+Today the Home page fires 5–7 independent panel queries, each
+paying ~500ms of queue wait before it can execute. End-to-end
+load is ~8s dominated by whichever panel query is slowest.
+Cached + batched, the Home page becomes **one** `$vt_results`
+read → one queue wait + one execution ≈ ~1–2s end-to-end. Same
+pattern for System Architecture.
+
+**Empirical confirmation** (from the research probe against
+the live staging deployment): a `$vt_results` read of the
+existing `tailscale_offline` scheduled search returned its
+cached rows with:
+- Queue wait: ~511 ms
+- Execution: ~527 ms
+- Total wall clock: **~1.04 s**
+
+That's the entire cost regardless of how expensive the original
+scheduled query was — `$vt_results` serves the stored aggregated
+rows directly, not by re-running the source query.
+
+**Scheduled searches to provision**:
+
+| Saved search ID | Query source | Cron |
+|---|---|---|
+| `traceexplorer__home_service_summary` | `Q.serviceSummary()` | `*/5 * * * *` |
+| `traceexplorer__home_service_time_series` | `Q.serviceTimeSeries(60)` | `*/5 * * * *` |
+| `traceexplorer__home_slow_traces` | `Q.rawSlowestTraces(500)` | `*/5 * * * *` |
+| `traceexplorer__home_error_spans` | `Q.rawRecentErrorSpans(300)` | `*/5 * * * *` |
+| `traceexplorer__sysarch_dependencies` | `Q.dependencies()` | `*/5 * * * *` |
+| `traceexplorer__sysarch_messaging_deps` | `Q.messagingDependencies()` | `*/5 * * * *` |
+| `traceexplorer__op_baselines` | baseline query (see 2b.1) | `0 * * * *` |
+
+All scheduled searches use a 1-hour window. Users who pick a
+non-default range (6h/24h/15m) fall back to the existing live
+query path — cache miss is a graceful degradation, not a
+failure.
+
+**Staleness tradeoff**: 5-minute cron means users see data up
+to 5 minutes old. For observability, that's generally fine.
+Fresher cron → higher worker-pool load; coarser → less fresh.
+5 minutes is a reasonable default; expose it in a Settings KV
+key if users want to tune.
+
+**Caveats + follow-ups**:
+
+- **Stream-filter toggle**: the app has a Settings toggle that
+  drops spans > 30s. Caching only reflects the filter state at
+  schedule time; toggling off falls back to live queries.
+  Acceptable — the toggle is rarely flipped mid-session.
+- **Dataset picker**: if the user swaps the dataset in Settings,
+  the scheduled searches need re-provisioning with the new
+  dataset name baked in. The provisioner should re-run on
+  dataset change (subscribe to the dataset KV key like the
+  existing `DatasetProvider`).
+- **Previous-window summary** (for delta chips) isn't cached
+  because it depends on the user's current range choice. Falls
+  back to live query; accept the slight delay for that one
+  panel.
+- **First-run empty state**: freshly-installed pack has no
+  cached panels. Home page gracefully degrades to live queries
+  until the first scheduled run lands (≤5 minutes post-install).
 
 #### 2c. User-facing alerts
 
