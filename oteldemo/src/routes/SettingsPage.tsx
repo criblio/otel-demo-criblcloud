@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import StatusBanner from '../components/StatusBanner';
+import ProvisioningPanel from '../components/ProvisioningPanel';
 import { saveAppSettings } from '../api/appSettings';
 import { setCurrentDataset } from '../api/dataset';
 import { setStreamFilterEnabled } from '../api/streamFilter';
@@ -207,6 +208,8 @@ export default function SettingsPage() {
           </div>
         </label>
       </div>
+
+      <ProvisioningPanel />
     </div>
   );
 }
