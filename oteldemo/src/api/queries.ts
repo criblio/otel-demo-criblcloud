@@ -234,6 +234,33 @@ export function serviceOperations(service: string): string {
 }
 
 /**
+ * Per-(service, operation) latency summary across the full window —
+ * every op in the dataset, stream filter applied. Used by the
+ * latency-anomaly detector on the Home page: we run this twice
+ * (current window + prior window) and flag ops whose current p95
+ * is significantly higher than their baseline.
+ *
+ * The stream filter stays ON. Without it, the query's p95 would be
+ * dominated by idle-poll spans on consumer ops, which poisons both
+ * the anomaly signal and the baseline. Genuine latency anomalies
+ * still show up because the non-filtered portion of the spans
+ * (≤ 30s) still dwarfs the healthy baseline (~100ms for most ops).
+ */
+export function allOperationsSummary(limit: number = 1000): string {
+  return `${spansBase()}
+    | extend svc=tostring(resource.attributes['service.name']),
+            dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0
+    ${streamFilterSpanKqlClause()}
+    | summarize requests=count(),
+                p50_us=percentile(dur_us, 50),
+                p95_us=percentile(dur_us, 95),
+                p99_us=percentile(dur_us, 99)
+      by svc, op=name
+    | sort by requests desc
+    | limit ${limit}`;
+}
+
+/**
  * Traces sorted by trace duration descending — "slow traces" panel on
  * the Home page. Optionally scoped to a service. Applies the same
  * long-poll / idle-wait filter as rawSlowestTraces() — see

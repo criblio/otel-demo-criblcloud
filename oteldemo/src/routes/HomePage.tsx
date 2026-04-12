@@ -23,6 +23,20 @@ import type {
   SlowTraceClass,
   ErrorClass,
 } from '../api/types';
+
+// NOTE: the latency-anomaly widget + its fetch wiring were removed
+// from this page pending ROADMAP §2b (durable baselines via
+// scheduled Cribl Saved Searches). The in-memory 24h baseline it
+// needed cost ~22s per refresh and couldn't survive incidents
+// older than the baseline window, which made it fire noisily.
+// The building blocks are parked intact and ready to plug back in
+// once the baseline source is durable:
+//   - src/components/OperationAnomalyList.tsx
+//   - src/api/search.ts::listOperationAnomalies
+//   - src/api/queries.ts::allOperationsSummary
+//   - src/api/types.ts::OperationAnomaly
+//   - src/utils/health.ts::latency_anomaly bucket + serviceHealth
+//     `anomalousServices` arg (currently always undefined)
 import s from './HomePage.module.css';
 
 type SortKey =
@@ -340,8 +354,6 @@ export default function HomePage() {
                 const err = fmtErrorRate(svc.errorRate);
                 const reqSpark = sparksByService.requests.get(svc.service) ?? [];
                 const p95Spark = sparksByService.p95.get(svc.service) ?? [];
-                const health = serviceHealth(svc);
-                const rowBg = healthRowBg(health.bucket);
                 // Only compare against the previous window when it had
                 // enough samples to trust the percentiles. Without this,
                 // services with tiny prev-window volume (flagd, image-
@@ -349,6 +361,15 @@ export default function HomePage() {
                 // wrong direction.
                 const prevRaw = prevByService.get(svc.service);
                 const prev = prevRaw && prevRaw.requests >= MIN_PREV_SAMPLES ? prevRaw : undefined;
+                // serviceHealth takes the previous window so it can
+                // promote to `traffic_drop` when requests fall off
+                // sharply vs baseline — the classic kafka-lag /
+                // starved-consumer signal that error-rate-only
+                // bucketing misses. The `latency_anomaly` path is
+                // plumbed but disabled until ROADMAP §2b lands a
+                // durable baseline source.
+                const health = serviceHealth(svc, prevRaw);
+                const rowBg = healthRowBg(health.bucket);
                 const prevReqPerMin = prev ? reqPerMin(prev.requests) : undefined;
                 return (
                   <tr
