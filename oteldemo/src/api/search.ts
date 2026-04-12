@@ -411,76 +411,48 @@ const ANOMALY_MIN_RATIO = 5;
 const ANOMALY_MIN_CURR_P95_US = 1_000_000;
 
 /**
- * Per-op latency anomalies vs a long rolling baseline window. For
- * every (service, operation) present in both windows, compute
- * currP95 / baselineP95 and emit a row when the ratio crosses the
- * threshold AND the current p95 exceeds the absolute floor AND the
- * baseline window had enough samples to trust.
+ * Per-op latency anomalies vs the persisted `criblapm_op_baselines`
+ * lookup (written by the scheduled op-baseline search provisioned
+ * via ROADMAP §2b.1). One server-side query: current-window
+ * aggregation, hash-join against the lookup, filter by ratio +
+ * absolute threshold + baseline sample count. Returns
+ * OperationAnomaly[] ready for the widget.
  *
- * Why the baseline is not the immediately-prior window: an ongoing
- * incident that's been running for longer than the curr-window
- * length would poison a same-length prior window too, and the ratio
- * would sit at ~1× even though the op is clearly broken. A long
- * rolling baseline (default 24h preceding curr) includes enough
- * healthy history to survive multi-hour outages.
+ * Cache-miss semantics: if the lookup doesn't exist yet (fresh
+ * install, scheduled search hasn't run its first cycle) the
+ * query returns zero rows. The widget shows its empty state.
+ * The `wait for baselines to populate` UX copy is the caller's
+ * responsibility.
  *
- * Catches scenarios that absolute-duration ranking misses: e.g.,
- * accounting.order-consumed at 18s p95 vs a healthy baseline of
- * ~200ms (→ 90× ratio) won't show up on the Slowest Trace Classes
- * widget because its absolute duration is smaller than a legitimate
- * 60s image-load trace that's been streaming-filtered down to the
- * upper bound.
- *
- * TODO: as part of the reason-pill redesign, also expose per-op
- * error-rate delta, volume delta, and child-attribution delta so
- * the widget can show WHY an op was flagged and the user can
- * triage without opening Service Detail.
+ * TODO: reason pills — expose per-op error-rate delta, volume
+ * delta, and child-attribution delta so the widget can explain
+ * *why* an op was flagged instead of showing a bare ratio. See
+ * ROADMAP §2b.2 follow-ups.
  */
 export async function listOperationAnomalies(
-  earliest: string,
-  latest: string,
-  baselineEarliest: string,
-  baselineLatest: string,
+  earliest: string = '-1h',
+  latest: string = 'now',
   topN: number = 20,
 ): Promise<OperationAnomaly[]> {
-  const [currRows, baselineRows] = await Promise.all([
-    runQuery(Q.allOperationsSummary(), earliest, latest, 1000),
-    runQuery(Q.allOperationsSummary(), baselineEarliest, baselineLatest, 1000),
-  ]);
-  const baselineMap = new Map<string, { p95: number; count: number }>();
-  for (const r of baselineRows) {
-    const key = `${String(r.svc ?? '')}\u0000${String(r.op ?? '')}`;
-    baselineMap.set(key, {
-      p95: toNum(r.p95_us),
-      count: toNum(r.requests),
-    });
-  }
-  const anomalies: OperationAnomaly[] = [];
-  for (const r of currRows) {
-    const svc = String(r.svc ?? '');
-    const op = String(r.op ?? '');
-    if (!svc || !op) continue;
-    const key = `${svc}\u0000${op}`;
-    const baseline = baselineMap.get(key);
-    if (!baseline) continue;
-    if (baseline.count < ANOMALY_MIN_BASELINE_REQUESTS) continue;
-    const prevP95 = baseline.p95;
-    if (prevP95 <= 0) continue;
-    const currP95 = toNum(r.p95_us);
-    if (currP95 < ANOMALY_MIN_CURR_P95_US) continue;
-    const ratio = currP95 / prevP95;
-    if (ratio < ANOMALY_MIN_RATIO) continue;
-    anomalies.push({
-      service: svc,
-      operation: op,
-      currP95Us: currP95,
-      prevP95Us: prevP95,
-      ratio,
-      requests: toNum(r.requests),
-    });
-  }
-  anomalies.sort((a, b) => b.ratio - a.ratio);
-  return anomalies.slice(0, topN);
+  const rows = await runQuery(
+    Q.operationAnomaliesFromLookup(
+      ANOMALY_MIN_RATIO,
+      ANOMALY_MIN_CURR_P95_US,
+      ANOMALY_MIN_BASELINE_REQUESTS,
+      topN,
+    ),
+    earliest,
+    latest,
+    topN,
+  );
+  return rows.map((r) => ({
+    service: String(r.svc ?? ''),
+    operation: String(r.op ?? ''),
+    currP95Us: toNum(r.curr_p95_us),
+    prevP95Us: toNum(r.prev_p95_us),
+    ratio: toNum(r.ratio),
+    requests: toNum(r.requests),
+  }));
 }
 
 function percentile(values: number[], p: number): number {

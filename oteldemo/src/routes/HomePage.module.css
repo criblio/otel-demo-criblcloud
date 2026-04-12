@@ -263,6 +263,16 @@
   gap: var(--cds-space-lg);
 }
 
+/* Full-width panel row — the latency-anomaly widget sits above
+ * the two-column slow / error row. Anomaly rows carry enough text
+ * (op name + before/after p95 + count + ratio pill) that a
+ * half-column would clip. */
+.panelsFull {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--cds-space-lg);
+}
+
 @media (max-width: 900px) {
   .panels {
     grid-template-columns: 1fr;

@@ -977,6 +977,65 @@ export function serviceMetricTimeSeries(
 }
 
 /**
+ * Latency anomaly detector that joins the current-window per-op
+ * p95 against the `criblapm_op_baselines` lookup maintained by
+ * the scheduled baseline search (§2b.1 in the ROADMAP). The join
+ * keeps the anomaly check to a single round trip and uses a
+ * hash-join against a cached CSV, so the read is sub-second even
+ * against an idle worker pool.
+ *
+ * Returns one row per anomalous (service, operation). Each row
+ * has: svc, op, curr_p95_us, prev_p95_us, ratio, requests.
+ *
+ * Filter chain:
+ *   - `isnotnull(prev_p95_us)` drops ops that aren't in the
+ *     baseline lookup (new ops since the last scheduled run).
+ *     Cache miss is NOT an anomaly — wait a schedule cycle.
+ *   - `prev_requests >= minBaselineRequests` skips baselines
+ *     with too few samples to be reliable.
+ *   - `curr_p95_us >= minCurrP95Us` skips sub-second "anomalies"
+ *     that nobody would act on (a 5× jump from 10ms → 50ms is
+ *     technically anomalous but noise-level).
+ *   - `curr_p95_us >= prev_p95_us * minRatio` is the core
+ *     "N× baseline" threshold.
+ *
+ * The lookup columns come back as strings because `export to
+ * lookup` emits CSV, so we `toreal()` them before comparing.
+ * Naming note: the current summarize produces a `requests`
+ * column and the lookup also has a `requests` column; the second
+ * shadows the first during join, so we alias to `curr_count`
+ * before the lookup to preserve it.
+ */
+export function operationAnomaliesFromLookup(
+  minRatio: number,
+  minCurrP95Us: number,
+  minBaselineRequests: number,
+  topN: number,
+): string {
+  return `${spansBase()}
+    | extend svc=tostring(resource.attributes['service.name']),
+             dur_us=(toreal(end_time_unix_nano)-toreal(start_time_unix_nano))/1000.0
+    ${streamFilterSpanKqlClause()}
+    | summarize curr_p95_us=percentile(dur_us, 95),
+                curr_count=count()
+      by svc, op=name
+    | lookup criblapm_op_baselines on svc, op
+    | extend prev_p95_us=toreal(p95_us),
+             prev_requests=toreal(requests)
+    | where isnotnull(prev_p95_us) and prev_p95_us > 0
+    | where curr_p95_us >= prev_p95_us * ${minRatio}
+      and curr_p95_us >= ${minCurrP95Us}
+      and prev_requests >= ${minBaselineRequests}
+    | project svc, op,
+              curr_p95_us,
+              prev_p95_us,
+              requests=curr_count,
+              ratio=curr_p95_us/prev_p95_us
+    | sort by ratio desc
+    | limit ${topN}`;
+}
+
+/**
  * Batched time-series: fetch (metric, bucket) → value for multiple
  * metrics in a single query. Used by the Service Detail page to
  * collapse 15+ per-row fetches on the Protocol/Runtime/Infrastructure
