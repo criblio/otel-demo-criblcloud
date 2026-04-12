@@ -80,7 +80,7 @@ function opBaselineQuery(): string {
   const base = Q.allOperationsSummary(10_000);
   return `${base}
     | export mode=overwrite
-             description="Cribl APM — rolling 24h per-op p95 baseline"
+             description="Cribl APM - rolling 24h per-op p95 baseline"
              to lookup ${OP_BASELINES_LOOKUP}`;
 }
 
@@ -116,7 +116,7 @@ export function getProvisioningPlan(): ProvisionedSearch[] {
     // ── Home panel caches ───────────────────────────────────
     {
       id: 'criblapm__home_service_summary',
-      name: 'Cribl APM — home service summary',
+      name: 'Cribl APM - home service summary',
       description:
         'Cribl APM: per-service rate / errors / p50 / p95 / p99 for the Home catalog. Read via $vt_results.',
       query: Q.serviceSummary(),
@@ -127,7 +127,7 @@ export function getProvisioningPlan(): ProvisionedSearch[] {
     },
     {
       id: 'criblapm__home_service_time_series',
-      name: 'Cribl APM — home service time series',
+      name: 'Cribl APM - home service time series',
       description:
         'Cribl APM: per-service request/error/p95 buckets for Home sparklines (60s bins). Read via $vt_results.',
       query: Q.serviceTimeSeries(60),
@@ -138,7 +138,7 @@ export function getProvisioningPlan(): ProvisionedSearch[] {
     },
     {
       id: 'criblapm__home_slow_traces',
-      name: 'Cribl APM — home slow trace classes',
+      name: 'Cribl APM - home slow trace classes',
       description:
         'Cribl APM: raw slow-trace rows (root svc/op + trace duration) for the Slowest Trace Classes panel. Read via $vt_results.',
       query: Q.rawSlowestTraces(500),
@@ -149,7 +149,7 @@ export function getProvisioningPlan(): ProvisionedSearch[] {
     },
     {
       id: 'criblapm__home_error_spans',
-      name: 'Cribl APM — home error spans',
+      name: 'Cribl APM - home error spans',
       description:
         'Cribl APM: recent error spans for the Home Error Classes panel. Read via $vt_results.',
       query: Q.rawRecentErrorSpans(300),
@@ -161,7 +161,7 @@ export function getProvisioningPlan(): ProvisionedSearch[] {
     // ── System Architecture panel caches ────────────────────
     {
       id: 'criblapm__sysarch_dependencies',
-      name: 'Cribl APM — system architecture RPC dependencies',
+      name: 'Cribl APM - system architecture RPC dependencies',
       description:
         'Cribl APM: service→service RPC edges via parent_span_id self-join. Read via $vt_results.',
       query: Q.dependencies(),
@@ -172,7 +172,7 @@ export function getProvisioningPlan(): ProvisionedSearch[] {
     },
     {
       id: 'criblapm__sysarch_messaging_deps',
-      name: 'Cribl APM — system architecture messaging dependencies',
+      name: 'Cribl APM - system architecture messaging dependencies',
       description:
         'Cribl APM: kafka / messaging edges aggregated by (service, topic, operation). Read via $vt_results.',
       query: Q.messagingDependencies(),
@@ -184,7 +184,7 @@ export function getProvisioningPlan(): ProvisionedSearch[] {
     // ── Op baseline lookup ──────────────────────────────────
     {
       id: 'criblapm__op_baselines',
-      name: 'Cribl APM — per-op 24h latency baselines',
+      name: 'Cribl APM - per-op 24h latency baselines',
       description:
         'Cribl APM: rolling 24h per-(service, operation) p50/p95/p99 baseline, materialized as the criblapm_op_baselines lookup for the anomaly detector.',
       query: opBaselineQuery(),
