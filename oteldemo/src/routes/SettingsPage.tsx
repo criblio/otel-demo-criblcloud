@@ -106,7 +106,7 @@ export default function SettingsPage() {
       <div className={s.card}>
         <h2 className={s.sectionTitle}>Dataset</h2>
         <p className={s.sectionHelp}>
-          All Trace Explorer queries run against this Cribl Search dataset.
+          All Cribl APM queries run against this Cribl Search dataset.
           It should contain OpenTelemetry span + log events (i.e. the same
           schema produced by the OpenTelemetry Collector's OTLP pipeline).
           Defaults to <code>otel</code>.

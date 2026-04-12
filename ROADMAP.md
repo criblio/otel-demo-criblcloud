@@ -1,4 +1,4 @@
-# Trace Explorer — Roadmap
+# Cribl APM — Roadmap
 
 This document is the canonical priority list for the `oteldemo/` Cribl
 Search App. It captures the competitive gap analysis we ran against
@@ -14,7 +14,7 @@ alerts, query language, federation) rather than reinvent them.
 
 ## Guiding principle: lean on Cribl Search
 
-The Trace Explorer runs *inside* Cribl Search. Cribl Search already
+The Cribl APM runs *inside* Cribl Search. Cribl Search already
 provides:
 
 - **Saved searches** — named, shareable KQL queries with persistence
@@ -39,7 +39,7 @@ Concretely, that shapes every roadmap item:
   ServiceDetail, and arch graph that builds a saved-search + alert
   definition under the hood, then calls the Cribl API to persist it
 - "Saved views" → Cribl saved searches owned by the app, tagged with
-  a `traceexplorer:view` tag so we can list and render them
+  a `criblapm:view` tag so we can list and render them
 - "Dashboards" → a set of saved searches composed into a page; still
   backed by Cribl, rendered by us
 - "Query language" → we keep the guided forms as the primary surface
@@ -173,9 +173,9 @@ does not block implementation.
 - ✅ **RESOLVED — Idempotent naming + upgrade path.** Confirmed
   by live probe: POST body's `id` is respected verbatim by the
   server. Convention: prefix every app-managed ID with
-  `traceexplorer__`. The list endpoint's response is filterable
+  `criblapm__`. The list endpoint's response is filterable
   client-side (lib field distinguishes built-ins from user
-  rows). Upgrade path: store a `traceexplorer__provisioned_version`
+  rows). Upgrade path: store a `criblapm__provisioned_version`
   KV key on success; re-run migrations when the stored version
   differs from the packaged version. Never touch rows whose ID
   doesn't match our prefix.
@@ -207,8 +207,8 @@ Replaces the in-memory 24h baseline in `listOperationAnomalies`:
 - A scheduled search runs hourly (or more often), computing
   per-(service, operation) p50/p95/p99 over a rolling 24h
   baseline window, then ends with
-  `| export mode=overwrite description="..." to lookup traceexplorer_op_baselines`
-- The anomaly query reads via `| lookup traceexplorer_op_baselines
+  `| export mode=overwrite description="..." to lookup criblapm_op_baselines`
+- The anomaly query reads via `| lookup criblapm_op_baselines
   on svc, op` — a hash-join against a workspace-scoped CSV,
   sub-millisecond overhead
 - Gracefully degrades: if the lookup doesn't exist yet (fresh
@@ -230,17 +230,17 @@ cached rows on every page load.
 
 **Mechanism**: every saved search's latest run is automatically
 retained in `$vt_results` for 7 days. A cached panel is just a
-read: `dataset="$vt_results" jobName="traceexplorer__panel_name"`.
+read: `dataset="$vt_results" jobName="criblapm__panel_name"`.
 No explicit `| export` step, no role restrictions, no 10k row
 cap to worry about for time-series.
 
 **The killer optimization**: `jobName` accepts an **array**.
 ```kql
 dataset="$vt_results"
-  jobName=["traceexplorer__home_service_summary",
-           "traceexplorer__home_service_time_series",
-           "traceexplorer__home_slow_traces",
-           "traceexplorer__home_error_spans"]
+  jobName=["criblapm__home_service_summary",
+           "criblapm__home_service_time_series",
+           "criblapm__home_slow_traces",
+           "criblapm__home_error_spans"]
 ```
 This returns all four cached panels in **one** search job. Each
 row comes back auto-tagged with `jobName`, so the client just
@@ -270,13 +270,13 @@ rows directly, not by re-running the source query.
 
 | Saved search ID | Query source | Cron |
 |---|---|---|
-| `traceexplorer__home_service_summary` | `Q.serviceSummary()` | `*/5 * * * *` |
-| `traceexplorer__home_service_time_series` | `Q.serviceTimeSeries(60)` | `*/5 * * * *` |
-| `traceexplorer__home_slow_traces` | `Q.rawSlowestTraces(500)` | `*/5 * * * *` |
-| `traceexplorer__home_error_spans` | `Q.rawRecentErrorSpans(300)` | `*/5 * * * *` |
-| `traceexplorer__sysarch_dependencies` | `Q.dependencies()` | `*/5 * * * *` |
-| `traceexplorer__sysarch_messaging_deps` | `Q.messagingDependencies()` | `*/5 * * * *` |
-| `traceexplorer__op_baselines` | baseline query (see 2b.1) | `0 * * * *` |
+| `criblapm__home_service_summary` | `Q.serviceSummary()` | `*/5 * * * *` |
+| `criblapm__home_service_time_series` | `Q.serviceTimeSeries(60)` | `*/5 * * * *` |
+| `criblapm__home_slow_traces` | `Q.rawSlowestTraces(500)` | `*/5 * * * *` |
+| `criblapm__home_error_spans` | `Q.rawRecentErrorSpans(300)` | `*/5 * * * *` |
+| `criblapm__sysarch_dependencies` | `Q.dependencies()` | `*/5 * * * *` |
+| `criblapm__sysarch_messaging_deps` | `Q.messagingDependencies()` | `*/5 * * * *` |
+| `criblapm__op_baselines` | baseline query (see 2b.1) | `0 * * * *` |
 
 All scheduled searches use a 1-hour window. Users who pick a
 non-default range (6h/24h/15m) fall back to the existing live
@@ -334,7 +334,7 @@ semantics and UI (error budget remaining, burn alerts at 1h / 6h /
 Assuming no install hook exists:
 
 - On first load, the app checks KV for a `provisioned-version` key
-- If absent or stale, show a one-time dialog: "Trace Explorer needs
+- If absent or stale, show a one-time dialog: "Cribl APM needs
   to create N scheduled searches to power baselines and alerts.
   [Create them]"
 - App calls the saved-search API with idempotent names; if a search

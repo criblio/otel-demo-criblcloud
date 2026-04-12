@@ -1,4 +1,4 @@
-# Trace Explorer — Cribl Search App
+# Cribl APM — Cribl Search App
 
 A Jaeger UI clone built as a [Cribl App Platform](AGENTS.md) app. Visualizes
 distributed traces from the OpenTelemetry demo against the `otel` lakehouse

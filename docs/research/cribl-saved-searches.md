@@ -317,8 +317,8 @@ dataset="otel"
             p99_us=percentile(dur_us, 99)
   by svc, op=name
 | export mode=overwrite
-         description="Trace Explorer operation baselines"
-         to lookup traceexplorer_op_baselines
+         description="Cribl APM operation baselines"
+         to lookup criblapm_op_baselines
 ```
 
 ### Option C: `| send` (round-trip through Stream)
@@ -422,9 +422,9 @@ an external alerting pipeline that isn't Cribl notifications).
    mention one. File as a platform feature request; design around
    a first-run dialog for now (§2e).
 3. **Idempotent naming convention confirmed safe**. Our POST probe
-   used `id: "__traceexplorer_research_probe__"` and the server
+   used `id: "__criblapm_research_probe__"` and the server
    respected it. Proposal stands: prefix all app-managed IDs with
-   `traceexplorer__` so the pack can diff-upsert on upgrade
+   `criblapm__` so the pack can diff-upsert on upgrade
    without touching user rows.
 
 Everything else that was previously "partial" or "open" is
@@ -442,8 +442,8 @@ resolved.
      the right `id`, `query`, `schedule.cronSchedule`, and
      `schedule.enabled=true`
    - Diffs the current set against expected (filter by
-     `id.startsWith("traceexplorer__")`) and upserts/deletes
-   - Writes a `traceexplorer__provisioned_version` KV key on
+     `id.startsWith("criblapm__")`) and upserts/deletes
+   - Writes a `criblapm__provisioned_version` KV key on
      success so upgrades can re-run migrations selectively
 2. **Ship the first scheduled search**: the per-op baseline.
    Query body captured above; schedule: `0 * * * *` (hourly)
@@ -451,7 +451,7 @@ resolved.
    baseline refresh). `keepLastN: 2` is fine since the lookup
    is the source of truth for reads.
 3. **Re-wire `listOperationAnomalies`** to read the baseline
-   via `lookup traceexplorer_op_baselines on svc, op` instead
+   via `lookup criblapm_op_baselines on svc, op` instead
    of an ad-hoc 24h query. This drops the 22s blocking query
    to roughly the same cost as the current-window-only fetch
    (~2-3s), unblocking the parked `OperationAnomalyList`.

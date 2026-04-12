@@ -44,8 +44,8 @@
     "typescript-eslint": "^8.58.0",
     "vite": "^8.0.4"
   },
-  "displayName": "OpenTelemetry Demo",
-  "description": "Visualize data from the OpenTelemetry demo",
+  "displayName": "Cribl APM",
+  "description": "Application performance monitoring on top of Cribl Search — traces, logs, and metrics from the OpenTelemetry demo.",
   "author": "Clint Sharp",
   "navItems": [
     {
