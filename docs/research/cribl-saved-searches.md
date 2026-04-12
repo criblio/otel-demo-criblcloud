@@ -219,17 +219,51 @@ dataset="$vt_results" jobName="my_saved_search" execution=-1
 dataset="$vt_results" jobName="my_saved_search" execution=*
 // or by explicit job ID (supports arrays):
 dataset="$vt_results" jobId=["id1","id2"]
+// and — the killer — multiple named saved searches at once:
+dataset="$vt_results" jobName=["panel_a","panel_b","panel_c"]
 ```
+
+The `jobName` array form is the key enabler for **batch panel
+reads**: one search job pulls the cached row sets of every
+panel on the page, partitioned client-side by the auto-
+populated `jobName` column on each row. See §2b.2 of the
+ROADMAP for the full rationale.
 
 **Write**: free, automatic — every scheduled run retains its
 results with no `| export` or `| send` step needed.
 
 **Drawbacks**:
-- Reading actually runs a search against the stored results,
-  which consumes search credits (distinct from the free
-  "open from History" UI action).
+- Reading technically runs a search against the stored results,
+  which consumes minor search credits (distinct from the free
+  "open from History" UI action). In practice the cost is
+  dominated by the per-job queue wait, not the aggregation — see
+  timing numbers below.
 - Retention capped at the TTL setting (default 7 days).
-- Not a fast index lookup — every read adds a search job.
+
+**Empirical timing** (staging deployment, single-node worker
+pool, reading the cached output of an existing scheduled
+search):
+```
+job id      : 1775952658785.7tDv49
+query       : dataset="$vt_results" jobName="tailscale_offline" | limit 100
+queue wait  : 511 ms
+execution   : 527 ms
+total       : 1.04 s
+```
+
+That 1-second read is the entire cost regardless of how
+expensive the source saved search was — `$vt_results` serves
+stored aggregated rows, not the raw data the original query
+scanned. For comparison, our live `allOperationsSummary` query
+against 24h of raw spans takes ~22 s end-to-end. A `$vt_results`
+read of the same cached result would be ~1 s.
+
+**When to pick this**: caching the primary output of a
+scheduled search for a later page to render verbatim, where
+no join against live data is needed. Ideal for Home catalog
+panels, sparklines, slow-trace classes, error classes, graph
+edges — any panel that today fires its own dedicated search on
+page load.
 
 ### Option B: `export ... to lookup` (explicit materialization)
 
@@ -325,35 +359,55 @@ a destination, which is a multi-step config. Heavier than
 | Role required | Any search user | Admin/Editor | Any search user |
 | Scope | Workspace | Workspace (not pack) | Stream-routed |
 
-### Recommendation for §2b
+### Recommendation — different mechanisms for different jobs
 
-**`export mode=overwrite to lookup` is the winner** for the
-operation-baseline use case:
+The two §2b use cases land on opposite sides of the
+comparison. Use both.
 
-1. Baselines are small (~100–1,000 `(svc, op)` rows) — well under
-   the 10k cap.
-2. The critical path is **read speed**: the live anomaly query
-   runs on every Home refresh, and we can't afford to stand up
-   another search job for each read. Hash-join on a lookup CSV
-   is effectively free.
-3. Idempotency is built in: `mode=overwrite` atomically replaces
-   the lookup on every scheduled run, no diff logic.
-4. Operators can inspect the lookup directly via the UI.
+#### For baselines (§2b.1) → `export mode=overwrite to lookup`
 
-The Admin/Editor role requirement for `export` is a consideration
-for §2e (first-run provisioning) but not a blocker: whoever
-installs the pack is almost certainly an Admin. If they're not,
-the provisioning dialog will surface a clear error.
+1. Baselines are a **join target**, not a standalone result.
+   The live anomaly detector needs to cross-reference hundreds
+   of current-window ops against their historical p95 in one
+   query — that's exactly what `lookup on svc, op` is built
+   for.
+2. Baselines are small (~100–1,000 `(svc, op)` rows) — well
+   under the 10k cap.
+3. Join read speed is sub-millisecond — no extra search job,
+   no queue wait. Critical because the join runs inside an
+   already-in-flight search, not as its own request.
+4. Idempotency is built in: `mode=overwrite` atomically
+   replaces the lookup on every scheduled run, no diff logic.
+5. Operators can inspect the lookup contents directly via
+   the Search UI's Lookups page.
 
-`$vt_results` would be the fallback if we hit the 10k row cap or
-if the Admin/Editor role ends up being a problem. The anomaly
-detector could be restructured to issue one search per
-`(svc, op)` anomaly candidate, reading the baseline on demand
-from `$vt_results`, but the read cost per Home page load would
-balloon.
+The Admin/Editor role requirement for `export` is a
+consideration for §2e first-run provisioning but not a blocker
+— pack installers are almost always Admins, and the
+provisioning dialog can surface a clear error if not.
 
-`send` is the right mechanism for feeding long-term storage or
-cross-workspace data flows — not baselines.
+#### For panel caching (§2b.2) → `$vt_results` + `jobName` array
+
+1. Panel data is the **primary output** of a saved search;
+   the page just renders the rows verbatim. No join needed.
+2. Some panels (sparklines, time-series) produce thousands of
+   rows across many services — safely clear of the 10k
+   lookup cap but still a non-trivial size.
+3. **Batch reads via `jobName=[...]` array**: one `$vt_results`
+   search pulls every cached panel in one job, collapsing
+   N queue waits down to 1. This is the biggest single win
+   available for Home + System Architecture load time.
+4. Zero write-side code: scheduled searches auto-persist to
+   `$vt_results`. Just provision the saved searches with
+   `schedule.enabled=true`.
+5. No Admin/Editor gate for writes — any scheduled search
+   works. Still pack-installer-Admin for provisioning.
+
+#### For long-term / cross-workspace flows → `send`
+
+Neither of our §2b use cases needs this. Reserve for future
+work (cross-region baselines, multi-workspace rollups, feeding
+an external alerting pipeline that isn't Cribl notifications).
 
 ## Remaining unknowns (much shorter list than before)
 

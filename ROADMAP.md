@@ -194,21 +194,119 @@ baseline-scheduled-search KQL.
    endpoint directly (we don't for §2b, but we might for §2c
    "show recent alert firings" UI).
 
-#### 2b. Durable baseline for latency anomaly detection
+#### 2b. Durable baselines + panel caching (via scheduled searches)
+
+Two distinct use cases ride on the same provisioning pipeline,
+with two different persistence mechanisms picked by what each
+read path needs.
+
+##### 2b.1. Latency anomaly baselines → `export to lookup`
 
 Replaces the in-memory 24h baseline in `listOperationAnomalies`:
 
-- A scheduled search runs every N minutes, computing per-(service,
-  operation) p50/p95/p99 over a rolling baseline window (7 days,
-  excluding the most recent hour so fresh incidents don't pollute
-  the baseline)
-- Results persist to the chosen target (KV / lookup / dataset)
-- The app reads the latest baseline row on page load — one cheap
-  lookup instead of a 24h span aggregation — and compares against
-  the current window
-- Gracefully degrades: if the baseline hasn't been populated yet
-  (first run, upgrade), fall back to the current in-memory 24h
-  approximation
+- A scheduled search runs hourly (or more often), computing
+  per-(service, operation) p50/p95/p99 over a rolling 24h
+  baseline window, then ends with
+  `| export mode=overwrite description="..." to lookup traceexplorer_op_baselines`
+- The anomaly query reads via `| lookup traceexplorer_op_baselines
+  on svc, op` — a hash-join against a workspace-scoped CSV,
+  sub-millisecond overhead
+- Gracefully degrades: if the lookup doesn't exist yet (fresh
+  install, first run), show "baselines still being computed"
+  empty state
+
+Why lookup and not `$vt_results` here: baselines are a **join
+target**, not a primary result. Live anomaly detection needs to
+cross-reference hundreds of current-window ops against their
+baselines in one query. `lookup on key` is designed for exactly
+that and runs nearly free; `$vt_results` would require
+cross-joining with more indirection.
+
+##### 2b.2. Home + System Architecture panel caching → `$vt_results`
+
+Makes the Home catalog and System Architecture views feel snappy
+by precomputing the expensive queries on a cron and serving
+cached rows on every page load.
+
+**Mechanism**: every saved search's latest run is automatically
+retained in `$vt_results` for 7 days. A cached panel is just a
+read: `dataset="$vt_results" jobName="traceexplorer__panel_name"`.
+No explicit `| export` step, no role restrictions, no 10k row
+cap to worry about for time-series.
+
+**The killer optimization**: `jobName` accepts an **array**.
+```kql
+dataset="$vt_results"
+  jobName=["traceexplorer__home_service_summary",
+           "traceexplorer__home_service_time_series",
+           "traceexplorer__home_slow_traces",
+           "traceexplorer__home_error_spans"]
+```
+This returns all four cached panels in **one** search job. Each
+row comes back auto-tagged with `jobName`, so the client just
+partitions the result stream by that column and hands each
+partition to its panel.
+
+Today the Home page fires 5–7 independent panel queries, each
+paying ~500ms of queue wait before it can execute. End-to-end
+load is ~8s dominated by whichever panel query is slowest.
+Cached + batched, the Home page becomes **one** `$vt_results`
+read → one queue wait + one execution ≈ ~1–2s end-to-end. Same
+pattern for System Architecture.
+
+**Empirical confirmation** (from the research probe against
+the live staging deployment): a `$vt_results` read of the
+existing `tailscale_offline` scheduled search returned its
+cached rows with:
+- Queue wait: ~511 ms
+- Execution: ~527 ms
+- Total wall clock: **~1.04 s**
+
+That's the entire cost regardless of how expensive the original
+scheduled query was — `$vt_results` serves the stored aggregated
+rows directly, not by re-running the source query.
+
+**Scheduled searches to provision**:
+
+| Saved search ID | Query source | Cron |
+|---|---|---|
+| `traceexplorer__home_service_summary` | `Q.serviceSummary()` | `*/5 * * * *` |
+| `traceexplorer__home_service_time_series` | `Q.serviceTimeSeries(60)` | `*/5 * * * *` |
+| `traceexplorer__home_slow_traces` | `Q.rawSlowestTraces(500)` | `*/5 * * * *` |
+| `traceexplorer__home_error_spans` | `Q.rawRecentErrorSpans(300)` | `*/5 * * * *` |
+| `traceexplorer__sysarch_dependencies` | `Q.dependencies()` | `*/5 * * * *` |
+| `traceexplorer__sysarch_messaging_deps` | `Q.messagingDependencies()` | `*/5 * * * *` |
+| `traceexplorer__op_baselines` | baseline query (see 2b.1) | `0 * * * *` |
+
+All scheduled searches use a 1-hour window. Users who pick a
+non-default range (6h/24h/15m) fall back to the existing live
+query path — cache miss is a graceful degradation, not a
+failure.
+
+**Staleness tradeoff**: 5-minute cron means users see data up
+to 5 minutes old. For observability, that's generally fine.
+Fresher cron → higher worker-pool load; coarser → less fresh.
+5 minutes is a reasonable default; expose it in a Settings KV
+key if users want to tune.
+
+**Caveats + follow-ups**:
+
+- **Stream-filter toggle**: the app has a Settings toggle that
+  drops spans > 30s. Caching only reflects the filter state at
+  schedule time; toggling off falls back to live queries.
+  Acceptable — the toggle is rarely flipped mid-session.
+- **Dataset picker**: if the user swaps the dataset in Settings,
+  the scheduled searches need re-provisioning with the new
+  dataset name baked in. The provisioner should re-run on
+  dataset change (subscribe to the dataset KV key like the
+  existing `DatasetProvider`).
+- **Previous-window summary** (for delta chips) isn't cached
+  because it depends on the user's current range choice. Falls
+  back to live query; accept the slight delay for that one
+  panel.
+- **First-run empty state**: freshly-installed pack has no
+  cached panels. Home page gracefully degrades to live queries
+  until the first scheduled run lands (≤5 minutes post-install).
 
 #### 2c. User-facing alerts
 
