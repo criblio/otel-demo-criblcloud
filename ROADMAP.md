@@ -99,12 +99,14 @@ evaluation, stores metadata so the Alerts page can render it. And
 for SLOs: a scheduled search that tracks error budget over a rolling
 28-day window.
 
-#### 2a. Research tasks (do these first — they determine the shape)
+#### 2a. Research tasks — **mostly done**
 
-Detailed findings from the first research pass live in
+Detailed findings in
 [`docs/research/cribl-saved-searches.md`](docs/research/cribl-saved-searches.md).
-Status of each question below is **RESOLVED** / **PARTIAL** /
-**OPEN**.
+The REST surface, persistence mechanism, POST shape, notification
+target collection, and idempotent-naming path are all resolved.
+The only remaining partial item — the platform install-time hook —
+does not block implementation.
 
 - ✅ **RESOLVED — Saved search provisioning API.** Cribl Search
   exposes `/api/v1/m/default_search/search/saved` (list, create),
@@ -124,59 +126,73 @@ Status of each question below is **RESOLVED** / **PARTIAL** /
   automatically on any call to `CRIBL_API_URL`. Same mechanism
   we already use for `/search/jobs` → works unchanged for
   `/search/saved/*`. No new auth plumbing needed.
-- 🟡 **PARTIAL — Scheduled-search result persistence + `$vt_*`.**
-  We observed `cribl dataset="$vt_dummy"` in a live saved search,
-  confirming `$vt_*` virtual tables exist. `/search/datasets`
-  does NOT list them, so they're ephemeral / virtual. Hypothesis:
-  a scheduled search's output auto-materializes to `$vt_<id>`,
-  queryable from subsequent queries. **Needs confirmation** —
-  prototype by provisioning a scheduled search via direct REST
-  POST, waiting for a run, and inspecting whether
-  `$vt_<savedQueryId>` becomes queryable. Alternative paths if
-  `$vt_` is a dead end: Cribl lookups (`lookup` keyword is used
-  in existing searches, so they exist and are joinable) or
-  pack-scoped KV writes from a polling client.
-- 🟡 **PARTIAL — `/search/saved/:id/results` endpoint.** The JS
-  bundle's `getResults(id)` constructs
-  `/search/saved/${id}/results`, but a direct GET returned 404
-  for `tailscale_offline` (which has `schedule.enabled=true`).
-  Either the endpoint requires a different prefix, or results
-  only persist when a run produced non-empty output (and this
-  alert is firing on an empty result set). **Needs a test
-  provisioned scheduled search that we know will produce output.**
-- 🟡 **PARTIAL — Install-time hook on the App Platform.**
-  `oteldemo/AGENTS.md` does not mention one. Pending a definitive
-  answer from the Cribl team, assume **no hook exists** and
-  design around a first-run provisioning dialog (§2e below).
-  This is a natural platform feature request to file regardless.
-- **OPEN — Idempotent naming + upgrade path.** Proposal on the
-  table: prefix all app-managed IDs with `traceexplorer__` so
-  the pack can `GET /search/saved?prefix=traceexplorer__` (if the
-  list endpoint supports filtering — unconfirmed), diff against
-  the expected set, and upsert / delete stale rows. Upgrade
-  schema migrations would bump a `traceexplorer_version` row in
-  the pack-scoped KV store and run one-time migrations keyed
-  off it. Never touch rows whose ID doesn't match our prefix.
-- **OPEN — Notification targets.** The `tailscale_offline` saved
-  search references `targets: ["typhoon_ntfy"]`, but calling
-  `/notifications/targets` returned 0 items. The targets live at
-  some path we haven't found yet — possibly
-  `/search/notification-targets`, `/notifications/channels`, or
-  under a product-scoped prefix. Must resolve before §2c (user
-  alerts) because creating an alert requires selecting a target.
+- ✅ **RESOLVED — Scheduled-search result persistence.** Three
+  mechanisms confirmed via [docs.cribl.io](https://docs.cribl.io)
+  and live probes:
+  1. **`$vt_results`** — every scheduled run is automatically
+     retained for 7 days (configurable). Read via
+     `dataset="$vt_results" jobName="my_search"`. Free write,
+     but reads run another search job (credit-charged).
+  2. **`export mode=overwrite to lookup`** — explicit at the end
+     of a scheduled query, materializes output to a workspace
+     lookup CSV. Read via `lookup x on k1, k2` — hash-join,
+     sub-millisecond overhead. Hard 10k-row cap. Admin/Editor
+     only.
+  3. **`| send`** — streams results through a Cribl HTTP Source
+     back into Stream for downstream storage. No row cap, heavier
+     setup, destination-specific retention.
 
-**Next concrete research steps** (for the follow-up session):
+  **Recommendation**: use `export mode=overwrite to lookup` for
+  the op-baseline case. Baselines are small (~100–1,000 rows,
+  well under 10k), and the critical path is **read speed** —
+  lookup hash-join is effectively free compared to a `$vt_results`
+  read which would add another search job per Home page load.
+  `$vt_results` stays as a fallback if we hit the 10k cap.
+- ✅ **RESOLVED — POST create.** Verified by live round-trip.
+  Minimum body: `{id, name, query, earliest, latest}`.
+  Client-chosen `id` is respected — directly enables idempotent
+  naming without a list-then-diff dance. Response is the
+  `{items:[<created>], count:1}` wrapper. GET-then-DELETE
+  round-trip verified clean.
+- 🟡 **PARTIAL — `/search/saved/:id/results` HTTP endpoint.** Still
+  404s for `tailscale_offline`. **Not blocking §2b**: the
+  canonical read path for scheduled search output is
+  `dataset="$vt_results" jobName=...`, and `export to lookup`
+  sidesteps the question entirely.
+- 🟡 **PARTIAL — Install-time hook on the App Platform.** Still
+  unconfirmed. File as a platform feature request. Design
+  around a first-run dialog in §2e for now.
+- ✅ **RESOLVED — Notification targets.** Top-level cross-product
+  endpoint at `GET /api/v1/notification-targets` (not under
+  `/m/default_search/`). A target created in Stream/Edge/Search
+  is visible from all products. UI path:
+  `Settings > Search > Notification Targets`. Supported types:
+  `bulletin_message` (system messages), `webhook`, `slack`,
+  `pagerduty`, `sns`, `email`. Referenced from a saved search's
+  `schedule.notifications.items[].targets[]` by ID.
+- ✅ **RESOLVED — Idempotent naming + upgrade path.** Confirmed
+  by live probe: POST body's `id` is respected verbatim by the
+  server. Convention: prefix every app-managed ID with
+  `traceexplorer__`. The list endpoint's response is filterable
+  client-side (lib field distinguishes built-ins from user
+  rows). Upgrade path: store a `traceexplorer__provisioned_version`
+  KV key on success; re-run migrations when the stored version
+  differs from the packaged version. Never touch rows whose ID
+  doesn't match our prefix.
 
-1. Capture a live POST body by driving the Save-As flow in the
-   UI and watching the network tab. Automation got close but the
-   Save button label varies by page; try a DOM-targeted click
-   instead of text-based.
-2. Write a `scripts/probe-saved-search.mjs` that reads the Auth0
-   JWT from the live browser's localStorage, POSTs a test saved
-   search with `schedule.enabled=true` and a short cron, waits
-   for a run, and inspects `/results` + `$vt_<id>` + lookups.
-3. File a Cribl platform feature request for an install-time
+**Detailed research notes** live in
+[`docs/research/cribl-saved-searches.md`](docs/research/cribl-saved-searches.md),
+including the full saved-search schema, live-example JSON, the
+three persistence mechanisms side-by-side, and the example
+baseline-scheduled-search KQL.
+
+**Remaining research is not blocking**:
+
+1. File a Cribl platform feature request for an install-time
    hook if confirmed missing.
+2. Re-visit `/search/saved/:id/results` if we ever need the HTTP
+   endpoint directly (we don't for §2b, but we might for §2c
+   "show recent alert firings" UI).
 
 #### 2b. Durable baseline for latency anomaly detection
 
