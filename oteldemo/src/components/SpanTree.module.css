@@ -1,0 +1,113 @@
+.tree {
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+  box-shadow: var(--cds-shadow-sm);
+  font-size: var(--cds-font-size-sm);
+  overflow: hidden;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.5fr) 1fr;
+  align-items: center;
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+  cursor: pointer;
+  transition: background var(--cds-transition-fast);
+  min-height: 28px;
+}
+.row:hover {
+  background: var(--cds-color-bg-subtle);
+}
+.row:last-child {
+  border-bottom: none;
+}
+.rowSelected {
+  background: var(--cds-color-accent-subtle);
+}
+.rowSelected:hover {
+  background: var(--cds-color-accent-subtle);
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: var(--cds-space-sm);
+  padding: var(--cds-space-xs) var(--cds-space-md);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.serviceDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.serviceName {
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+  flex-shrink: 0;
+}
+
+.opName {
+  color: var(--cds-color-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar {
+  position: relative;
+  height: 16px;
+  margin: 0 var(--cds-space-md);
+  background: var(--cds-color-bg-muted);
+  border-radius: var(--cds-radius-sm);
+}
+
+.barFill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: var(--cds-radius-sm);
+  display: flex;
+  align-items: center;
+  padding-left: 4px;
+  font-size: var(--cds-font-size-xs);
+  color: rgba(255, 255, 255, 0.95);
+  white-space: nowrap;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  min-width: 2px;
+}
+
+.error .barFill {
+  background: var(--cds-color-danger) !important;
+}
+
+.timeAxis {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.5fr) 1fr;
+  background: var(--cds-color-bg-subtle);
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-muted);
+}
+
+.timeAxisLabel {
+  padding: var(--cds-space-xs) var(--cds-space-md);
+}
+
+.timeAxisTrack {
+  position: relative;
+  margin: 0 var(--cds-space-md);
+}
+
+.timeAxisTick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  font-variant-numeric: tabular-nums;
+  padding: 4px 0;
+}

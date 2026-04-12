@@ -1,0 +1,97 @@
+.card {
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+  box-shadow: var(--cds-shadow-sm);
+  overflow: hidden;
+}
+
+.header {
+  padding: var(--cds-space-sm) var(--cds-space-lg);
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+  background: var(--cds-color-bg-subtle);
+}
+.title {
+  font-size: var(--cds-font-size-sm);
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+}
+.subtitle {
+  margin-top: 2px;
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-muted);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: var(--cds-space-md);
+  padding: 6px var(--cds-space-lg);
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+  font-size: var(--cds-font-size-sm);
+}
+.row:last-child {
+  border-bottom: none;
+}
+
+.rowLabel {
+  color: var(--cds-color-fg-muted);
+  font-size: var(--cds-font-size-xs);
+  font-weight: var(--cds-font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowValue {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+  white-space: nowrap;
+}
+.rowValueWarn {
+  color: var(--cds-color-danger);
+}
+.rowLoading {
+  color: var(--cds-color-fg-subtle);
+  font-style: italic;
+}
+
+.rowSpark {
+  display: flex;
+  align-items: center;
+}
+
+/* Match the opsCard skeleton on Service Detail so all cards feel
+   unified while data is in flight. */
+.skeletonRows {
+  padding: var(--cds-space-lg);
+}
+.skeletonRows > div {
+  height: 14px;
+  margin-bottom: 10px;
+  background: linear-gradient(
+    90deg,
+    var(--cds-color-bg-muted) 0%,
+    var(--cds-color-bg-subtle) 50%,
+    var(--cds-color-bg-muted) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--cds-radius-sm);
+  animation: mc-shimmer 1.4s linear infinite;
+}
+.skeletonRows > div:last-child {
+  margin-bottom: 0;
+}
+@keyframes mc-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
