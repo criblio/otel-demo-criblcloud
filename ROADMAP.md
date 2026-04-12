@@ -234,18 +234,20 @@ read: `dataset="$vt_results" jobName="criblapm__panel_name"`.
 No explicit `| export` step, no role restrictions, no 10k row
 cap to worry about for time-series.
 
-**The killer optimization**: `jobName` accepts an **array**.
+**The killer optimization**: one batched read returns every
+cached panel in a single search job. The docs advertise an
+inline array literal (`jobName=[...]`) but it doesn't actually
+parse; the working form is `| where jobName in (...)`:
 ```kql
 dataset="$vt_results"
-  jobName=["criblapm__home_service_summary",
-           "criblapm__home_service_time_series",
-           "criblapm__home_slow_traces",
-           "criblapm__home_error_spans"]
+  | where jobName in ("criblapm__home_service_summary",
+                       "criblapm__home_service_time_series",
+                       "criblapm__home_slow_traces",
+                       "criblapm__home_error_spans")
 ```
-This returns all four cached panels in **one** search job. Each
-row comes back auto-tagged with `jobName`, so the client just
-partitions the result stream by that column and hands each
-partition to its panel.
+Each row comes back auto-tagged with `jobName`, so the client
+just partitions the result stream by that column and hands
+each partition to its panel.
 
 Today the Home page fires 5–7 independent panel queries, each
 paying ~500ms of queue wait before it can execute. End-to-end

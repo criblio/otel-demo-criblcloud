@@ -271,11 +271,24 @@ export async function listSlowTraceClasses(
   topClasses = 20,
 ): Promise<SlowTraceClass[]> {
   const rows = await runQuery(Q.rawSlowestTraces(rawLimit), earliest, latest, rawLimit);
+  return groupSlowTraceClasses(rows, topClasses);
+}
+
+/**
+ * Pure grouping logic used by both the live `listSlowTraceClasses`
+ * verb and the panel-cache partitioner. Expects rows with root_svc,
+ * root_op, trace_id, trace_dur_us as produced by
+ * `Q.rawSlowestTraces`.
+ */
+export function groupSlowTraceClasses(
+  rows: Record<string, unknown>[],
+  topClasses: number = 20,
+): SlowTraceClass[] {
   interface Acc {
     rootService: string;
     rootOperation: string;
     durations: number[];
-    traceIds: string[]; // sorted by duration as we go
+    traceIds: string[];
   }
   const groups = new Map<string, Acc>();
   for (const r of rows) {
@@ -295,8 +308,6 @@ export async function listSlowTraceClasses(
   }
   const classes: SlowTraceClass[] = [];
   for (const g of groups.values()) {
-    // Pair durations with trace_ids and sort so the first trace_id is the
-    // slowest exemplar.
     const paired = g.durations.map((d, i) => ({ d, id: g.traceIds[i] }));
     paired.sort((a, b) => b.d - a.d);
     const durs = paired.map((p) => p.d);
@@ -326,6 +337,18 @@ export async function listErrorClasses(
   topClasses = 20,
 ): Promise<ErrorClass[]> {
   const rows = await runQuery(Q.rawRecentErrorSpans(rawLimit), earliest, latest, rawLimit);
+  return groupErrorClasses(rows, topClasses);
+}
+
+/**
+ * Pure grouping logic shared by the live `listErrorClasses` verb
+ * and the panel-cache partitioner. Expects rows with svc, name,
+ * msg, trace_id, _time as produced by `Q.rawRecentErrorSpans`.
+ */
+export function groupErrorClasses(
+  rows: Record<string, unknown>[],
+  topClasses: number = 20,
+): ErrorClass[] {
   interface Acc {
     service: string;
     operation: string;
@@ -339,9 +362,6 @@ export async function listErrorClasses(
     const svc = String(r.svc ?? 'unknown');
     const op = String(r.name ?? 'unknown');
     const rawMsg = String(r.msg ?? '').trim();
-    // Normalize: take the first line and strip trailing whitespace; if
-    // empty, fall back to "(no status message)" so the grouping still
-    // has a stable key.
     const firstLine = rawMsg.split('\n')[0].trim();
     const msg = firstLine || '(no status message)';
     const t = toNum(r._time) * 1000;

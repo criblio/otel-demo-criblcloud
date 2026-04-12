@@ -217,17 +217,30 @@ dataset="$vt_results" jobName="my_saved_search"
 dataset="$vt_results" jobName="my_saved_search" execution=-1
 // or all history:
 dataset="$vt_results" jobName="my_saved_search" execution=*
-// or by explicit job ID (supports arrays):
-dataset="$vt_results" jobId=["id1","id2"]
-// and — the killer — multiple named saved searches at once:
-dataset="$vt_results" jobName=["panel_a","panel_b","panel_c"]
+// or by explicit job ID:
+dataset="$vt_results" jobId="1704236905683.wgocax"
 ```
 
-The `jobName` array form is the key enabler for **batch panel
-reads**: one search job pulls the cached row sets of every
-panel on the page, partitioned client-side by the auto-
-populated `jobName` column on each row. See §2b.2 of the
-ROADMAP for the full rationale.
+**Batch reads across multiple named searches** use an `in (...)`
+filter instead of the advertised array literal. The docs at
+[docs.cribl.io/search/vt_results](https://docs.cribl.io/search/vt_results/)
+show `jobName=["a","b"]` as the array form, but Cribl KQL does
+not actually parse the array literal in the top-of-pipeline
+position. Empirically:
+
+```kql
+// FAILS with "no viable alternative at input 'jobName=['":
+dataset="$vt_results" jobName=["panel_a","panel_b"]
+
+// WORKS — returns the union of rows from both searches:
+dataset="$vt_results"
+  | where jobName in ("panel_a", "panel_b", "panel_c")
+```
+
+Both reads return one row per cached result row, with the
+`jobName` column auto-populated so the client can partition
+the mixed stream client-side. See §2b.2 of the ROADMAP for
+the full rationale on why this batching is load-bearing.
 
 **Write**: free, automatic — every scheduled run retains its
 results with no `| export` or `| send` step needed.
