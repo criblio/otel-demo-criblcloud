@@ -52,38 +52,11 @@ capability they'd ride on.
 
 ## Priorities (in rough order)
 
-### 1. AI-powered investigations (Copilot Investigator) — **NEXT**
+### ~~1. AI-powered investigations (Copilot Investigator)~~ — **DONE**
 
-Cribl Search ships a "Run an Investigation" feature (Copilot
-Investigator) that takes a natural-language prompt about a problem,
-runs AI-guided queries against the data, and produces a structured
-finding. We want to embed this capability throughout Cribl APM so
-users can drill into problems with one click.
-
-**Spike goals:**
-
-- Capture the API traffic between the Investigator UI and the Cribl
-  Search backend to understand the protocol (REST endpoints, request
-  shape, streaming behavior, how it chains queries)
-- Validate it can find a real outage: turn on `paymentFailure` flag,
-  craft a prompt that leads the Investigator to the payment service
-  error spike
-- Document the API surface so we can replicate it in our app
-
-**Integration points once the API is understood:**
-
-- "Investigate" button on Home catalog rows (pre-filled with service
-  context)
-- "Investigate" on System Architecture edges (pre-filled with
-  dependency context)
-- "Investigate" on Service Detail (pre-filled with service + time
-  range)
-- "Investigate" on individual traces (pre-filled with trace context)
-- Standalone investigation page with free-form prompt
-
-This leapfrogs the "Natural language / AI query" roadmap item (#11
-previously) by building on Cribl's existing AI infrastructure rather
-than wiring up our own LLM integration.
+Moved to the Completed section below. All integration points and
+polish items shipped in PR #14. See `docs/research/copilot-investigator.md`
+for the API spike and A/B comparison.
 
 ### 2. User-facing alerts (via Cribl Saved Searches)
 
@@ -232,6 +205,47 @@ Being honest about the wins too:
 ---
 
 ## Completed
+
+### ~~AI-powered investigations (Copilot Investigator)~~ — DONE
+
+Cribl Search ships a "Run an Investigation" feature (Copilot
+Investigator) — a chat-based AI agent that runs KQL queries, reads
+dataset schemas, and produces structured findings. We embedded it
+throughout Cribl APM so users can drill into problems with one click.
+
+**What shipped** (PR #14, branch `copilot-investigator`):
+
+- **API spike + protocol docs** in
+  [`docs/research/copilot-investigator.md`](docs/research/copilot-investigator.md)
+  — streaming NDJSON protocol, tool-use loop, A/B comparison
+  confirming pre-filled APM context dramatically improves accuracy
+  and time-to-root-cause (bare prompt never completed; context-enriched
+  found `ECONNREFUSED` and `Invalid token` root causes in minutes)
+- **Agent client** (`src/api/agent.ts`) — streaming NDJSON reader +
+  frame parser
+- **Context builder** (`src/api/agentContext.ts`) — pre-fills dataset
+  shape, field mappings, KQL dialect notes (including the bracket-
+  quoted dotted-field rule), service topology, ISO-8601 timestamp
+  requirement, trace-vs-span semantics, and example working queries
+- **Tool dispatcher** (`src/api/agentTools.ts`) — implements
+  `run_search` against the existing `runQuery`, `render_trace`
+  against `getTrace`, `present_investigation_summary` with a
+  structured UI payload
+- **Loop orchestrator** (`src/api/agentLoop.ts`) — conversation
+  state machine emitting typed events to the UI reducer
+- **Chat UI** (`src/routes/InvestigatePage.tsx`) — streaming
+  transcript, inline Run Query approval cards, result tables,
+  rendered trace waterfall (reuses the existing `SpanTree`
+  component), and a dedicated Final Report card
+- **Investigate buttons** on:
+  - Home catalog rows (service + health + delta signals)
+  - Service Detail hero (service + top erroring/slow operations)
+  - Trace Detail header (trace_id + error spans; seeds the agent
+    to call `render_trace` first)
+  - System Architecture node tooltip
+  - System Architecture edges (click an edge line to investigate
+    parent→child with call count + error rate)
+  - Latency anomaly widget rows (p95 ratio + baseline context)
 
 ### ~~Metrics support~~ — DONE
 
