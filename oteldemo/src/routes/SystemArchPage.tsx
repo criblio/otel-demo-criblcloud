@@ -10,8 +10,10 @@ import {
   getServiceTimeSeries,
   listOperationSummaries,
 } from '../api/search';
+import { listCachedSysarchPanels } from '../api/panelCache';
 import { binSecondsFor } from '../components/timeRanges';
 import { previousWindow } from '../utils/timeRange';
+import { useStreamFilterEnabled } from '../hooks/useStreamFilter';
 import { HEALTH_LEGEND, serviceHealth } from '../utils/health';
 import type {
   DependencyEdge,
@@ -52,6 +54,7 @@ export default function SystemArchPage() {
   const [loadingDeps, setLoadingDeps] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dims, setDims] = useState({ w: 800, h: 600 });
+  const streamFilterEnabled = useStreamFilterEnabled();
 
   // Track container size for the SVG
   useEffect(() => {
@@ -64,39 +67,19 @@ export default function SystemArchPage() {
     return () => ro.disconnect();
   }, []);
 
-  // Fetch dependencies + service stats + time-series in parallel
+  // Fetch dependencies + service stats + time-series. Tries the
+  // batched $vt_results cache first when the user is on -1h and
+  // the stream filter is on; falls through to live queries on
+  // cache miss or non-default range.
   useEffect(() => {
     let cancelled = false;
     const binSeconds = binSecondsFor(lookback);
     setLoadingDeps(true);
     setError(null);
 
-    const pDeps = getDependencies(lookback, 'now')
-      .then((e) => {
-        if (!cancelled) setEdges(e);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
-          setEdges([]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingDeps(false);
-      });
-
-    listServiceSummaries(lookback, 'now')
-      .then((r) => {
-        if (!cancelled) setSummaries(r);
-      })
-      .catch(() => {
-        if (!cancelled) setSummaries([]);
-      });
-
-    // Previous-window summaries: feeds the traffic-drop detection
-    // in serviceHealth(). Non-fatal — if this fails we just lose
-    // the drop signal, which is still strictly better than the
-    // pre-existing error-rate-only path.
+    // Previous-window summaries always live — range-dependent,
+    // not cacheable. Fires in the background and feeds traffic-
+    // drop detection in serviceHealth().
     const prev = previousWindow(lookback);
     listServiceSummaries(prev.earliest, prev.latest)
       .then((r) => {
@@ -106,19 +89,70 @@ export default function SystemArchPage() {
         if (!cancelled) setPrevSummaries([]);
       });
 
-    getServiceTimeSeries(binSeconds, undefined, lookback, 'now')
-      .then((r) => {
-        if (!cancelled) setBuckets(r);
-      })
-      .catch(() => {
-        if (!cancelled) setBuckets([]);
-      });
+    const tryCache = async (): Promise<boolean> => {
+      if (lookback !== '-1h' || !streamFilterEnabled) return false;
+      try {
+        const cached = await listCachedSysarchPanels();
+        if (
+          cached.serviceSummaries &&
+          cached.serviceBuckets &&
+          cached.dependencies
+        ) {
+          if (cancelled) return true;
+          setSummaries(cached.serviceSummaries);
+          setBuckets(cached.serviceBuckets);
+          setEdges(cached.dependencies);
+          setLoadingDeps(false);
+          return true;
+        }
+      } catch {
+        /* fall through to live */
+      }
+      return false;
+    };
 
-    void pDeps;
+    (async () => {
+      const cacheHit = await tryCache();
+      if (cacheHit || cancelled) return;
+
+      // Cache miss — live queries.
+      const pDeps = getDependencies(lookback, 'now')
+        .then((e) => {
+          if (!cancelled) setEdges(e);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setError(err instanceof Error ? err.message : String(err));
+            setEdges([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingDeps(false);
+        });
+
+      listServiceSummaries(lookback, 'now')
+        .then((r) => {
+          if (!cancelled) setSummaries(r);
+        })
+        .catch(() => {
+          if (!cancelled) setSummaries([]);
+        });
+
+      getServiceTimeSeries(binSeconds, undefined, lookback, 'now')
+        .then((r) => {
+          if (!cancelled) setBuckets(r);
+        })
+        .catch(() => {
+          if (!cancelled) setBuckets([]);
+        });
+
+      void pDeps;
+    })();
+
     return () => {
       cancelled = true;
     };
-  }, [lookback]);
+  }, [lookback, streamFilterEnabled]);
 
   function setLookback(value: string) {
     // Clear the legacy ?lookback= if present so we don't end up with

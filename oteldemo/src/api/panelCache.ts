@@ -30,50 +30,34 @@ import {
   getSystemArchPanelJobNames,
 } from './provisionedSearches';
 import { groupSlowTraceClasses, groupErrorClasses } from './search';
+import { toDependencyEdges, toMessagingEdges } from './transform';
 import type {
   ServiceSummary,
   ServiceBucket,
   SlowTraceClass,
   ErrorClass,
+  DependencyEdge,
 } from './types';
 
 /** Panels any Cribl APM page can pull from the cache. When a
- * page only needs a subset (e.g. Home doesn't need messaging
- * dependencies) it simply ignores the extra keys. */
+ * page only needs a subset (e.g. Home doesn't need dependency
+ * edges) it simply ignores the extra keys.
+ *
+ * The `dependencies` field is the pre-merged DependencyEdge[] —
+ * RPC edges (via Q.dependencies) + messaging edges (via
+ * Q.messagingDependencies) glued together the same way
+ * `search.ts::getDependencies` does at runtime. The cache
+ * consumer gets the exact same shape as the live path. */
 export interface CachedPanels {
   serviceSummaries: ServiceSummary[] | null;
   serviceBuckets: ServiceBucket[] | null;
   slowClasses: SlowTraceClass[] | null;
   errorClasses: ErrorClass[] | null;
-  dependencies: DependencyEdgeRow[] | null;
-  messagingDependencies: MessagingEdgeRow[] | null;
+  dependencies: DependencyEdge[] | null;
   /** Latest bucket timestamp observed across the cached panels,
    * in milliseconds since epoch. Used by the UI to render a
    * "Cached N s ago" indicator. Null if nothing cached. */
   lastUpdatedMs: number | null;
-}
-
-/** Raw row shapes returned by the scheduled searches. These are
- * thin — they match what `Q.dependencies()` and
- * `Q.messagingDependencies()` produce at the KQL level and get
- * handed to `transform.ts::toDependencyEdges` /
- * `toMessagingEdges` for final mapping. */
-export interface DependencyEdgeRow {
-  parent: string;
-  child: string;
-  callCount: number;
-  errorCount: number;
-  p95DurUs: number;
-}
-
-export interface MessagingEdgeRow {
-  svc: string;
-  msg_dest: string;
-  msg_op: string;
-  msg_system?: string;
-  spans: number;
-  errors: number;
-  p95_us: number;
 }
 
 function toNum(v: unknown): number {
@@ -161,34 +145,19 @@ function parseServiceBuckets(
   }));
 }
 
-/** Parse the dependency-edge partition. Raw shape matches what
- * Q.dependencies() emits. */
-function parseDependencyEdges(
-  rows: Record<string, unknown>[],
-): DependencyEdgeRow[] {
-  return rows.map((r) => ({
-    parent: String(r.parent ?? ''),
-    child: String(r.child ?? ''),
-    callCount: toNum(r.callCount),
-    errorCount: toNum(r.errorCount),
-    p95DurUs: toNum(r.p95DurUs),
-  }));
-}
-
-/** Parse the messaging-edge partition. Raw shape matches what
- * Q.messagingDependencies() emits. */
-function parseMessagingEdges(
-  rows: Record<string, unknown>[],
-): MessagingEdgeRow[] {
-  return rows.map((r) => ({
-    svc: String(r.svc ?? ''),
-    msg_dest: String(r.msg_dest ?? ''),
-    msg_op: String(r.msg_op ?? ''),
-    msg_system: r.msg_system ? String(r.msg_system) : undefined,
-    spans: toNum(r.spans),
-    errors: toNum(r.errors),
-    p95_us: toNum(r.p95_us),
-  }));
+/** Parse + merge RPC and messaging dependency partitions into
+ * the same DependencyEdge[] shape `search.ts::getDependencies`
+ * returns. Either partition may be null if that scheduled
+ * search hasn't run yet; callers get a partial edge list in
+ * that case rather than an error. */
+function mergeDependencyEdges(
+  rpcRows: Record<string, unknown>[] | null,
+  msgRows: Record<string, unknown>[] | null,
+): DependencyEdge[] | null {
+  if (!rpcRows && !msgRows) return null;
+  const rpc = rpcRows ? toDependencyEdges(rpcRows) : [];
+  const msg = msgRows ? toMessagingEdges(msgRows) : [];
+  return [...rpc, ...msg];
 }
 
 /**
@@ -246,8 +215,7 @@ function buildCachedPanels(
     serviceBuckets: timeSeriesRows ? parseServiceBuckets(timeSeriesRows) : null,
     slowClasses: slowRows ? groupSlowTraceClasses(slowRows) : null,
     errorClasses: errorRows ? groupErrorClasses(errorRows) : null,
-    dependencies: depRows ? parseDependencyEdges(depRows) : null,
-    messagingDependencies: msgDepRows ? parseMessagingEdges(msgDepRows) : null,
+    dependencies: mergeDependencyEdges(depRows, msgDepRows),
     lastUpdatedMs,
   };
 }
