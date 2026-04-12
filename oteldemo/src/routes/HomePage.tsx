@@ -262,7 +262,7 @@ export default function HomePage() {
       {/* Hero bar with title, range picker, auto-refresh toggle */}
       <div className={s.hero}>
         <div>
-          <h1 className={s.heroTitle}>Trace Explorer</h1>
+          <h1 className={s.heroTitle}>Cribl APM</h1>
           <div className={s.heroSubtitle}>
             Service catalog, recent activity, and live trace data from the{' '}
             <code>otel</code> dataset.
