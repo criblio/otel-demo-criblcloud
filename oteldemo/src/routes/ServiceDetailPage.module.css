@@ -111,6 +111,26 @@
   }
 }
 
+/* -------- Metric-backed cards row: protocol / runtime / infra -------- */
+
+.metricCards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--cds-space-lg);
+  margin-top: var(--cds-space-lg);
+  align-items: start;
+}
+@media (max-width: 1300px) {
+  .metricCards {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 900px) {
+  .metricCards {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* -------- Lower grid: ops table + errors + deps -------- */
 
 .grid {

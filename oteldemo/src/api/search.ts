@@ -147,9 +147,12 @@ function toObject(v: unknown): Record<string, unknown> {
 }
 
 /**
- * Fetch the per-service rollup. When `service` is provided, the query
- * is pre-filtered to that service at the KQL level — a big speedup on
- * Service Detail (see serviceSummary() docstring).
+ * Fetch the per-service rollup. Raw-span aggregation — the
+ * spanmetrics-backed path was tried but omitting the long-poll /
+ * idle-wait stream filter distorted percentile-of-means latencies
+ * (any service with a streaming gRPC endpoint showed 500s+ p95).
+ * Raw spans get the stream filter, which is the source of truth
+ * for latency percentiles.
  */
 export async function listServiceSummaries(
   earliest = '-1h',
@@ -172,14 +175,21 @@ export async function listServiceSummaries(
   });
 }
 
-/** Fetch time-bucketed per-service aggregates. */
+/**
+ * Fetch time-bucketed per-service aggregates.
+ */
 export async function getServiceTimeSeries(
   binSeconds: number,
   service?: string,
   earliest = '-1h',
   latest = 'now',
 ): Promise<ServiceBucket[]> {
-  const rows = await runQuery(Q.serviceTimeSeries(binSeconds, service), earliest, latest, 10000);
+  const rows = await runQuery(
+    Q.serviceTimeSeries(binSeconds, service),
+    earliest,
+    latest,
+    10000,
+  );
   return rows.map((r) => ({
     service: String(r.svc ?? 'unknown'),
     // bin(_time, Ns) returns a "bucket" column; the Cribl engine sometimes
@@ -193,7 +203,11 @@ export async function getServiceTimeSeries(
   }));
 }
 
-/** Fetch operations for a service, sorted by volume. */
+/**
+ * Fetch operations for a service, sorted by volume. Raw-span
+ * aggregation — see listServiceSummaries() for why spanmetrics
+ * isn't used here.
+ */
 export async function listOperationSummaries(
   service: string,
   earliest = '-1h',
@@ -447,6 +461,135 @@ export async function listMetricServices(
   if (!metric) return [];
   const rows = await runQuery(Q.metricServices(metric), earliest, latest, 500);
   return rows.map((r) => String(r.svc)).filter(Boolean);
+}
+
+/**
+ * List every metric a given service emits (or has cluster-level k8s
+ * metrics for). Drives the auto-detection logic for the Protocol /
+ * Runtime / Infra cards on Service Detail.
+ */
+export async function listServiceMetricNames(
+  service: string,
+  earliest = '-1h',
+  latest = 'now',
+): Promise<string[]> {
+  if (!service) return [];
+  const rows = await runQuery(
+    Q.listServiceMetrics(service),
+    earliest,
+    latest,
+    500,
+  );
+  return rows.map((r) => String(r._metric ?? '')).filter(Boolean);
+}
+
+/**
+ * Latest scalar value for a metric scoped to a service. Returns
+ * undefined if the metric has no samples in the window. Used by
+ * the Service Detail cards for "current memory usage", "ready
+ * state", etc.
+ */
+export async function getServiceMetricLatest(
+  service: string,
+  metric: string,
+  earliest = '-1h',
+  latest = 'now',
+): Promise<number | undefined> {
+  if (!service || !metric) return undefined;
+  const rows = await runQuery(
+    Q.serviceMetricLatest(service, metric),
+    earliest,
+    latest,
+    1,
+  );
+  if (rows.length === 0) return undefined;
+  const v = toNum(rows[0].val);
+  return Number.isFinite(v) ? v : undefined;
+}
+
+/**
+ * Cumulative-counter delta for a service over the window. Used
+ * by the Infrastructure card's restart counter display — "how many
+ * restarts in the last hour" is the actionable number, not the
+ * lifetime count.
+ */
+export async function getServiceMetricDelta(
+  service: string,
+  metric: string,
+  earliest = '-1h',
+  latest = 'now',
+): Promise<number> {
+  if (!service || !metric) return 0;
+  const rows = await runQuery(
+    Q.serviceMetricDelta(service, metric),
+    earliest,
+    latest,
+    1,
+  );
+  if (rows.length === 0) return 0;
+  const v = toNum(rows[0].delta);
+  return Number.isFinite(v) ? v : 0;
+}
+
+/**
+ * Single-query batch fetch of per-service sparklines for many
+ * metrics at once. Returns a Map keyed by metric name with sorted
+ * (t, v) series. The Service Detail Protocol/Runtime/Infrastructure
+ * cards share one call instead of firing one query per row, which
+ * was the main cause of a 30+ second Service Detail load time under
+ * the previous implementation (every extra row queued behind the
+ * others in the search worker pool).
+ */
+export async function getServiceMetricsBatch(
+  service: string,
+  metrics: string[],
+  binSeconds: number,
+  earliest = '-1h',
+  latest = 'now',
+): Promise<Map<string, Array<{ t: number; v: number }>>> {
+  const out = new Map<string, Array<{ t: number; v: number }>>();
+  if (!service || metrics.length === 0) return out;
+  const rows = await runQuery(
+    Q.serviceMetricsBatch(service, metrics, binSeconds),
+    earliest,
+    latest,
+    5000,
+  );
+  for (const r of rows) {
+    const m = String(r.metric ?? '');
+    if (!m) continue;
+    if (!out.has(m)) out.set(m, []);
+    out.get(m)!.push({ t: toNum(r.bucket) * 1000, v: toNum(r.val) });
+  }
+  for (const series of out.values()) series.sort((a, b) => a.t - b.t);
+  return out;
+}
+
+/**
+ * Time-series for a service metric — drives sparklines in the
+ * Service Detail cards. Default agg is p95 which makes sense for
+ * the histogram metrics (http/rpc/db/jvm-gc durations) most of
+ * these cards show; callers can override for gauges where max or
+ * avg is more meaningful.
+ */
+export async function getServiceMetricSeries(
+  service: string,
+  metric: string,
+  binSeconds: number,
+  agg: 'avg' | 'max' | 'p95' = 'p95',
+  earliest = '-1h',
+  latest = 'now',
+): Promise<Array<{ t: number; v: number }>> {
+  if (!service || !metric) return [];
+  const rows = await runQuery(
+    Q.serviceMetricTimeSeries(service, metric, binSeconds, agg),
+    earliest,
+    latest,
+    1000,
+  );
+  return rows
+    .map((r) => ({ t: toNum(r.bucket) * 1000, v: toNum(r.val) }))
+    .sort((a, b) => a.t - b.t);
 }
 
 /**
