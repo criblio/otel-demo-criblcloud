@@ -147,18 +147,48 @@ unreadable 19-digit integers in search result tables, which is useless to a
 human. **Always project an ISO-8601 timestamp alongside any raw timestamp**
 in query output so the user sees a readable time.
 
-Convert to ISO-8601:
+**Prefer \`_time\` for row-level timestamps.** The collector populates
+\`_time\` from \`start_time_unix_nano\` already, so for 95% of queries
+you can just do:
 
 \`\`\`kql
 | extend iso_time = strftime(_time, "%Y-%m-%dT%H:%M:%S.%LZ")
 \`\`\`
 
-For spans, convert the start/end time fields via \`_time\` (which the
-collector populates from \`start_time_unix_nano\`), or do it manually:
+This is the canonical form — prefer it over any conversion from the raw
+nano fields. If you need the actual start/end boundaries of a span
+(e.g. rendering latency via the difference), there are two **non-obvious
+parser rules** you MUST respect:
+
+1. **No \`1e9\` / scientific notation.** The Cribl KQL parser rejects
+   it with a "mismatched input" syntax error. Use the literal
+   \`1000000000\` instead.
+2. **No inline math inside a function argument.** Writing
+   \`strftime(toreal(start_time_unix_nano)/1000000000, "fmt")\` fails
+   with the same mismatched-input error because the parser doesn't
+   accept a binary expression as a function argument. You must
+   compute the seconds in a **separate \`extend\`** first, then pass
+   the named variable to \`strftime\`.
+
+Correct pattern for span start/end conversion:
 
 \`\`\`kql
-| extend start_iso = strftime(toreal(start_time_unix_nano)/1e9, "%Y-%m-%dT%H:%M:%S.%LZ"),
-         end_iso = strftime(toreal(end_time_unix_nano)/1e9, "%Y-%m-%dT%H:%M:%S.%LZ")
+| extend start_sec = toreal(start_time_unix_nano)/1000000000,
+         end_sec   = toreal(end_time_unix_nano)/1000000000
+| extend start_iso = strftime(start_sec, "%Y-%m-%dT%H:%M:%S.%LZ"),
+         end_iso   = strftime(end_sec,   "%Y-%m-%dT%H:%M:%S.%LZ")
+\`\`\`
+
+Wrong patterns (both produce
+\`"mismatched input '(' expecting {<EOF>, ';'}"\` at parse time and burn
+a turn):
+
+\`\`\`kql
+// WRONG — inline math inside strftime()
+| extend start_iso = strftime(toreal(start_time_unix_nano)/1000000000, "...")
+
+// WRONG — scientific notation
+| extend sec = toreal(start_time_unix_nano)/1e9
 \`\`\`
 
 Project \`iso_time\` (or \`start_iso\` / \`end_iso\`) in every query that shows
