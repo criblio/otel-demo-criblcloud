@@ -371,6 +371,13 @@ ${scopeLines.join('\n')}
 
 ### How to conduct this investigation
 
+**Target: converge in ≤8 turns.** Every additional turn grows the
+conversation history, which grows the time the next LLM response
+needs to start streaming, which pushes us toward the platform's
+30-second time-to-first-byte proxy timeout. An answer at turn 7 is
+far more valuable than a more thoroughly validated answer at turn 14
+that never reaches the user. When in doubt, ship the finding.
+
 1. Use the field mappings and example queries above. Do NOT use regex
    extraction on \`_raw\`. Do NOT call \`get_dataset_context\` — the
    schema is already documented above.
@@ -384,11 +391,16 @@ ${scopeLines.join('\n')}
    **\`render_trace\` tool** with that trace_id. The UI will display
    the full waterfall to the user. Do NOT just list trace_ids as
    text — render at least one representative trace.
-5. When you have enough evidence to explain the problem, call the
+5. As soon as you have **(a) a root-cause service**, **(b) one
+   rendered representative trace**, and **(c) a sentence describing
+   the user-visible impact**, call the
    **\`present_investigation_summary\` tool** with structured
-   \`findings\` and a \`conclusion\`. Do NOT write the summary as
-   markdown or as a template literal in plain text — always use the
-   tool call. The UI renders the tool's output as a final report card.
+   \`findings\` and a \`conclusion\`. That's the bar. Do **not** run
+   additional validation queries ("just to be sure", "to strengthen
+   the conclusion", "to rule out propagation") — the rendered trace
+   IS your validation, and the user can always ask for more depth
+   if they want it. Writing the summary as markdown or a template
+   literal in plain text is never acceptable — always use the tool.
 6. **After calling \`present_investigation_summary\`, STOP.** Do not
    write any additional text, do not restate the findings, do not
    emit a \`## Findings\` or \`## Conclusion\` markdown block after

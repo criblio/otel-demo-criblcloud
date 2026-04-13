@@ -86,8 +86,17 @@ export interface RunLoopOptions {
   approveToolCall?: (call: ToolCallInvocation) => Promise<boolean>;
   /** Abort the whole investigation. */
   signal?: AbortSignal;
-  /** Max number of agent round-trips before giving up — safety net
-   *  against runaway loops. Default 30. */
+  /** Max number of agent round-trips before giving up. Default 12 —
+   *  tuned down from the original 30 after the 2026-04-13 retest
+   *  showed the paymentUnreachable agent found the root cause by
+   *  turn ~7 but kept running "validation" turns until turn 14,
+   *  where the conversation history had grown large enough that the
+   *  LLM couldn't start streaming within the platform's 30-second
+   *  time-to-first-byte proxy timeout. Any investigation that
+   *  hasn't converged by turn 12 is almost certainly going in
+   *  circles or has a contextual problem a 13th turn won't fix;
+   *  cutting off there keeps the loop well inside the TTFB budget
+   *  and forces the agent to commit to a summary. */
   maxTurns?: number;
 }
 
@@ -116,7 +125,7 @@ export async function runInvestigation(opts: RunLoopOptions): Promise<void> {
     onEvent,
     approveToolCall,
     signal,
-    maxTurns = 30,
+    maxTurns = 12,
   } = opts;
 
   const messages: AgentMessage[] = [...initialMessages];
