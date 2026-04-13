@@ -24,6 +24,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { runInvestigation, type LoopEvent } from '../api/agentLoop';
 import { buildSeedPrompt, type InvestigationSeed } from '../api/agentContext';
 import type { AgentMessage, AgentToolCall } from '../api/agent';
+import { isSessionExpiredError } from '../api/agent';
 import type {
   ToolExecutionResult,
   RunSearchUi,
@@ -66,6 +67,10 @@ interface ErrorEntry {
   kind: 'error';
   id: string;
   message: string;
+  /** True when this error is a session-expired from the platform's
+   *  auth token. The UI shows a Reload Page affordance instead of
+   *  just the raw message. */
+  sessionExpired?: boolean;
 }
 
 type TranscriptEntry = UserEntry | AssistantEntry | ToolCallEntry | ErrorEntry;
@@ -237,9 +242,10 @@ export default function InvestigatePage() {
         signal: abortRef.current.signal,
       }).catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
+        const sessionExpired = isSessionExpiredError(err);
         setTranscript((prev) => [
           ...prev,
-          { kind: 'error', id: `err-${Date.now()}`, message: msg },
+          { kind: 'error', id: `err-${Date.now()}`, message: msg, sessionExpired },
         ]);
         setRunning(false);
       });
@@ -438,6 +444,29 @@ function TranscriptRow({
     );
   }
   if (entry.kind === 'error') {
+    if (entry.sessionExpired) {
+      return (
+        <div className={s.errorBanner} role="alert">
+          <div className={s.errorBannerTitle}>
+            Your Cribl session has expired
+          </div>
+          <div className={s.errorBannerBody}>
+            The investigation was interrupted because the platform
+            auth token is no longer valid. Reload the page to pick up
+            a fresh token, then rerun your question.
+          </div>
+          <div className={s.errorBannerActions}>
+            <button
+              type="button"
+              className={`${s.btn} ${s.btnPrimary}`}
+              onClick={() => window.location.reload()}
+            >
+              Reload page
+            </button>
+          </div>
+        </div>
+      );
+    }
     return <div className={s.errorBanner}>Error: {entry.message}</div>;
   }
   // toolCall
@@ -808,7 +837,12 @@ function applyLoopEvent(
     case 'error':
       return [
         ...prev,
-        { kind: 'error', id: `err-${Date.now()}`, message: ev.error.message },
+        {
+          kind: 'error',
+          id: `err-${Date.now()}`,
+          message: ev.error.message,
+          sessionExpired: isSessionExpiredError(ev.error),
+        },
       ];
   }
 }
