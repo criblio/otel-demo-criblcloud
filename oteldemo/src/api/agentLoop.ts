@@ -153,52 +153,83 @@ export async function runInvestigation(opts: RunLoopOptions): Promise<void> {
       let textContent = '';
       let pendingToolCalls: AgentToolCall[] | null = null;
 
-      for await (const frame of streamAgent(req, signal)) {
-        if (signal?.aborted) {
-          onEvent({ kind: 'done', reason: 'aborted' });
-          return;
+      // Per-turn timing for diagnosing platform-proxy timeouts. The
+      // user reported "Error: Request timeout" ~1m into a multi-turn
+      // investigation. When that happens we want the error to say
+      // *which* turn failed and how long it ran, not a bare string,
+      // so the next debug round has actionable detail.
+      const turnStart = Date.now();
+      const turnLabel = `turn ${turn + 1} after ${messages.length} prior msgs`;
+      try {
+        for await (const frame of streamAgent(req, signal)) {
+          if (signal?.aborted) {
+            onEvent({ kind: 'done', reason: 'aborted' });
+            return;
+          }
+
+          switch (frame.kind) {
+            case 'text':
+              textContent += frame.content;
+              onEvent({ kind: 'assistantText', turnId, chunk: frame.content });
+              break;
+
+            case 'toolCalls':
+              // Tool call frames arrive as a batch after all text
+              // for this turn is streamed. Record them and stop
+              // consuming the stream — the server closes it right
+              // after emitting tool calls anyway, but being explicit
+              // keeps the flow obvious.
+              pendingToolCalls = frame.calls;
+              break;
+
+            case 'toolResult':
+              // Server-side tool (e.g. fetch_local_context). Not
+              // something we executed — just surface to the UI in
+              // case we want to show a debug pane.
+              onEvent({
+                kind: 'notification',
+                turnId,
+                toolName: 'fetch_local_context',
+                content: frame.content,
+              });
+              break;
+
+            case 'notification':
+              onEvent({
+                kind: 'notification',
+                turnId,
+                toolName: frame.toolName,
+                content: frame.content,
+              });
+              break;
+
+            case 'unknown':
+              // Keep unknown frames for debugging but don't stall.
+              break;
+          }
         }
-
-        switch (frame.kind) {
-          case 'text':
-            textContent += frame.content;
-            onEvent({ kind: 'assistantText', turnId, chunk: frame.content });
-            break;
-
-          case 'toolCalls':
-            // Tool call frames arrive as a batch after all text
-            // for this turn is streamed. Record them and stop
-            // consuming the stream — the server closes it right
-            // after emitting tool calls anyway, but being explicit
-            // keeps the flow obvious.
-            pendingToolCalls = frame.calls;
-            break;
-
-          case 'toolResult':
-            // Server-side tool (e.g. fetch_local_context). Not
-            // something we executed — just surface to the UI in
-            // case we want to show a debug pane.
-            onEvent({
-              kind: 'notification',
-              turnId,
-              toolName: 'fetch_local_context',
-              content: frame.content,
-            });
-            break;
-
-          case 'notification':
-            onEvent({
-              kind: 'notification',
-              turnId,
-              toolName: frame.toolName,
-              content: frame.content,
-            });
-            break;
-
-          case 'unknown':
-            // Keep unknown frames for debugging but don't stall.
-            break;
+      } catch (turnErr) {
+        const elapsedMs = Date.now() - turnStart;
+        const elapsedSec = (elapsedMs / 1000).toFixed(1);
+        const baseMsg =
+          turnErr instanceof Error ? turnErr.message : String(turnErr);
+        // AbortError is normal user-cancel — propagate as-is.
+        if (turnErr instanceof Error && turnErr.name === 'AbortError') {
+          throw turnErr;
         }
+        // SessionExpiredError stays itself; just attach the timing
+        // for the banner to display if it wants.
+        const enriched = new Error(
+          `${baseMsg} (failed on ${turnLabel}, after ${elapsedSec}s of LLM streaming)`,
+        );
+        if (
+          turnErr instanceof Error &&
+          (turnErr as { isSessionExpired?: boolean }).isSessionExpired === true
+        ) {
+          (enriched as { isSessionExpired?: boolean }).isSessionExpired = true;
+          enriched.name = 'SessionExpiredError';
+        }
+        throw enriched;
       }
 
       // Emit the final assistant text as one atomic message in the
