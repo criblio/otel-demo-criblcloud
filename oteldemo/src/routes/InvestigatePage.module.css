@@ -441,10 +441,13 @@
 
 .errorBannerBody {
   color: var(--cds-color-text);
-  margin-bottom: var(--cds-space-sm);
 }
 
-.errorBannerActions {
-  display: flex;
-  gap: var(--cds-space-sm);
+.errorBannerBody p {
+  margin: 0 0 var(--cds-space-sm) 0;
+}
+
+.errorBannerBody ul {
+  margin: 0;
+  padding-left: var(--cds-space-md);
 }

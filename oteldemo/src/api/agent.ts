@@ -69,14 +69,18 @@ export type AgentFrame =
   | { kind: 'notification'; toolName?: string; content: unknown }
   | { kind: 'unknown'; raw: unknown };
 
-/** Raised when the Cribl platform's injected auth token has expired
- *  and we get a 5xx back with a "Bearer Token has expired" reason.
- *  Catch this at the UI layer and prompt the user to reload the tab —
- *  a hard reload is currently the only way to pick up a fresh token
- *  from the platform's fetch proxy. */
+/** Raised when the agent endpoint returns a 5xx with a
+ *  "Bearer Token has expired" reason. This is a Cribl platform-side
+ *  problem with the AI bearer token cache (separate from the user's
+ *  Cribl session cookie — other API calls keep working); no
+ *  client-side action recovers it. Catch this at the UI layer and
+ *  show a banner explaining the situation rather than treating it
+ *  like a transient retry-able error. */
 export class SessionExpiredError extends Error {
   readonly isSessionExpired = true as const;
-  constructor(message = 'Your Cribl session has expired. Reload the page to continue.') {
+  constructor(
+    message = 'Cribl AI bearer token cache is in a broken state. Reloading the page will not help — the only known recoveries are a full Cribl logout/re-login or contacting Cribl support.',
+  ) {
     super(message);
     this.name = 'SessionExpiredError';
   }
@@ -101,40 +105,6 @@ function looksLikeSessionExpired(body: string): boolean {
     lower.includes('token has expired') ||
     lower.includes('token expired')
   );
-}
-
-/**
- * Touch one of the cheap AI metadata GETs to nudge the platform to
- * refresh the AI bearer token it caches per user.
- *
- * The Cribl platform's fetch proxy injects auth into every API call
- * (per `oteldemo/AGENTS.md`), but the AI subsystem appears to keep
- * its own per-user bearer token with a shorter TTL than the user's
- * Cribl session cookie. Once it expires, the agent endpoint returns
- * 500 + `{"reason":"Bearer Token has expired"}` even though the
- * user's session is still valid (other API calls keep working).
- *
- * Captures of the native Cribl Search Copilot UI (see
- * `docs/research/investigator-spike/all-api-calls.json`) show it
- * fetches these AI metadata endpoints before every investigation:
- *   - `GET /api/v1/ai/consent/`
- *   - `GET /api/v1/ai/settings/disabled`
- *   - `GET /api/v1/ai/settings/features`
- * Best theory is one of these (or all of them) is what keeps the
- * AI bearer token cache warm. We pick `/ai/settings/features`
- * because it's a single round-trip, has no side effects, and is
- * the most-recently-fetched of the three in the native trace.
- *
- * Best-effort. Errors swallowed — the caller is going to retry the
- * agent POST regardless and surface a real error if that still
- * fails.
- */
-async function warmupAiToken(signal?: AbortSignal): Promise<void> {
-  try {
-    await fetch(`${apiUrl()}/ai/settings/features`, { method: 'GET', signal });
-  } catch {
-    /* swallow — caller will retry the agent POST and surface real failures */
-  }
 }
 
 function apiUrl(): string {
@@ -190,31 +160,6 @@ export function parseAgentFrame(line: string): AgentFrame | null {
   return { kind: 'unknown', raw: obj };
 }
 
-/** POST the agent request once. On a 5xx with an expired-token
- *  signature, returns null so the caller can warm up + retry; on
- *  any other failure, throws. On success, returns the live Response
- *  so the caller can stream from `resp.body`. */
-async function postAgentRequest(
-  req: AgentRequest,
-  signal?: AbortSignal,
-): Promise<Response | null> {
-  const resp = await fetch(agentUrl(), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(req),
-    signal,
-  });
-  if (resp.ok) {
-    if (!resp.body) throw new Error('Agent response has no body');
-    return resp;
-  }
-  const body = await resp.text().catch(() => '');
-  if (looksLikeSessionExpired(body)) {
-    return null;
-  }
-  throw new Error(`Agent request failed (${resp.status}): ${body}`);
-}
-
 /**
  * POST a request to the agent endpoint and yield parsed frames as
  * they arrive. The stream ends when the server closes the connection.
@@ -222,32 +167,42 @@ async function postAgentRequest(
  * AbortSignal support lets callers cancel in-flight investigations
  * (e.g. when the user navigates away or clicks a Stop button).
  *
- * Expired-token recovery: if the first POST returns a 5xx with a
- * "Bearer Token has expired" body, we call `warmupAiToken()` to
- * nudge the platform's AI token cache and retry the POST exactly
- * once. If the retry also returns the expired-token error, we
- * surface a `SessionExpiredError` so the UI can prompt the user to
- * reload the page (the only currently-known fallback if the warmup
- * GET doesn't recover the cache). All other 5xx/4xx errors throw
- * immediately without retrying, since they're not transient.
+ * Expired-token detection: if the response body contains
+ * "Bearer Token has expired" (any case), throw a typed
+ * `SessionExpiredError` so the UI can show a clear "Cribl AI token
+ * cache is in a broken state" message instead of a raw 500. We
+ * don't retry, warm up, or attempt automatic recovery — the failure
+ * is server-side (the per-user AI bearer token cache is in a state
+ * no client-side action can refresh; verified by reproducing the
+ * exact same 500 in Cribl Search's own native `/search/agent`
+ * Copilot UI on the same workspace, where the native UI's "Try
+ * Again" button is a re-POST with no recovery either). The fix
+ * lives on the platform side; the only known mitigations from a
+ * client are a full Cribl logout/re-login or waiting for the
+ * server-side cache to TTL out.
  */
 export async function* streamAgent(
   req: AgentRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<AgentFrame, void, void> {
-  let resp = await postAgentRequest(req, signal);
-  if (resp === null) {
-    // First attempt hit the expired-token error. Warm up the AI
-    // bearer token cache and retry once. If we still get the same
-    // error, give up and ask the user to reload.
-    await warmupAiToken(signal);
-    resp = await postAgentRequest(req, signal);
-    if (resp === null) {
+  const resp = await fetch(agentUrl(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(req),
+    signal,
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    if (looksLikeSessionExpired(body)) {
       throw new SessionExpiredError();
     }
+    throw new Error(`Agent request failed (${resp.status}): ${body}`);
+  }
+  if (!resp.body) {
+    throw new Error('Agent response has no body');
   }
 
-  const reader = resp.body!.getReader();
+  const reader = resp.body.getReader();
   const decoder = new TextDecoder('utf-8');
   // Line buffer — NDJSON frames are newline-delimited, but a single
   // chunk from the reader can contain a partial line.

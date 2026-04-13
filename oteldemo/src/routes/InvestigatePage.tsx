@@ -448,21 +448,31 @@ function TranscriptRow({
       return (
         <div className={s.errorBanner} role="alert">
           <div className={s.errorBannerTitle}>
-            Your Cribl session has expired
+            Cribl AI bearer token cache is in a broken state
           </div>
           <div className={s.errorBannerBody}>
-            The investigation was interrupted because the platform
-            auth token is no longer valid. Reload the page to pick up
-            a fresh token, then rerun your question.
-          </div>
-          <div className={s.errorBannerActions}>
-            <button
-              type="button"
-              className={`${s.btn} ${s.btnPrimary}`}
-              onClick={() => window.location.reload()}
-            >
-              Reload page
-            </button>
+            <p>
+              The Cribl AI subsystem returned{' '}
+              <code>Bearer Token has expired</code>. This is a
+              platform-side problem with the per-user AI token cache,
+              <em>not</em> your Cribl session — other Cribl API calls
+              are still working.
+            </p>
+            <p>
+              <strong>Reloading this page will not help.</strong> The
+              same failure reproduces in Cribl Search&apos;s own
+              native <code>/search/agent</code> Copilot UI on this
+              workspace, so client-side retries can&apos;t recover.
+              Known mitigations:
+            </p>
+            <ul>
+              <li>Fully log out of Cribl Cloud and log back in.</li>
+              <li>
+                Wait for the server-side cache to TTL out and try
+                again.
+              </li>
+              <li>Contact Cribl support if the problem persists.</li>
+            </ul>
           </div>
         </div>
       );
