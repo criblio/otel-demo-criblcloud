@@ -166,9 +166,14 @@ per-row timestamps. You may also keep the raw field for reference, but the
 ISO version must be in the projection too. In summary text to the user,
 always refer to times in ISO-8601, never as raw unix epochs.
 
-### Example working queries (proven against this data)
+### Reference query (the only example you need)
 
-**Service error-rate + latency breakdown:**
+The field-mapping table above is the source of truth — write your own
+queries from it. This template covers the basic shape (svc filter, error
+predicate, percentile aggregation) and any other query type can be
+derived by changing what you summarize on. Always include
+\`isnotnull(end_time_unix_nano)\` to filter to spans (vs metrics or logs).
+
 \`\`\`kql
 dataset="${datasetId}" | where isnotnull(end_time_unix_nano)
   | extend svc=tostring(resource.attributes['service.name']),
@@ -176,43 +181,15 @@ dataset="${datasetId}" | where isnotnull(end_time_unix_nano)
           is_error=(tostring(status.code)=="2")
   | summarize requests=count(),
               errors=countif(is_error),
-              p50=percentile(dur_us, 50),
-              p95=percentile(dur_us, 95),
-              p99=percentile(dur_us, 99)
+              p95=percentile(dur_us, 95)
     by svc
-  | extend error_rate=round(100.0*errors/requests, 2)
   | sort by requests desc
 \`\`\`
 
-**Service-to-service dependency call graph (with error counts):**
-\`\`\`kql
-dataset="${datasetId}" | where isnotnull(end_time_unix_nano)
-  | extend svc=tostring(resource.attributes['service.name']),
-          parent=tostring(parent_span_id),
-          is_error=(tostring(status.code)=="2")
-  | where parent != "" and isnotempty(parent)
-  | project trace_id, parent, svc, is_error
-  | join kind=inner (
-      dataset="${datasetId}" | where isnotnull(end_time_unix_nano)
-      | extend psvc=tostring(resource.attributes['service.name']),
-              psid=tostring(span_id)
-      | project trace_id, psid, psvc
-    ) on trace_id, $left.parent == $right.psid
-  | where svc != psvc
-  | summarize callCount=count(), errorCount=countif(is_error) by parent=psvc, child=svc
-  | sort by callCount desc
-\`\`\`
-
-**Recent error spans for a specific service:**
-\`\`\`kql
-dataset="${datasetId}" | where isnotnull(end_time_unix_nano)
-  | extend svc=tostring(resource.attributes['service.name']),
-          is_error=(tostring(status.code)=="2")
-  | where svc=="<SERVICE>" and is_error
-  | project _time, trace_id, span_id, name, status.message, attributes
-  | sort by _time desc
-  | limit 50
-\`\`\`
+For service-to-service dependency analysis: self-join span rows on
+\`trace_id\` matching \`parent_span_id\` to its parent's \`span_id\`,
+then group by parent service vs child service. For per-minute
+histograms: \`summarize ... by svc, bin(_time, 60s)\`.
 
 ### Common failure modes to check (in priority order)
 
@@ -317,6 +294,52 @@ function signalsBlock(signals?: string[]): string {
 
 ${lines}
 `;
+}
+
+/**
+ * Parse the user's natural-language phrasing of a time range (e.g.
+ * "in the last 5 minutes", "right now", "the past hour", "last 30
+ * min") into a relative-time string compatible with our `earliest`
+ * field (e.g. `-5m`, `-1h`). Returns null when no match — the
+ * caller should keep its existing default.
+ *
+ * Why this exists: in the 2026-04-12 scenario eval the Investigator
+ * inherited the seed's default `-15m` even when the user explicitly
+ * asked about "last 5 minutes," which dragged stale errors from the
+ * prior test into the new investigation. Tightening up-front removes
+ * a class of false positives.
+ *
+ * Patterns handled (case-insensitive):
+ *   - "in the last N minute(s)" / "last N min" / "past N m"
+ *   - "in the last N hour(s)"   / "past N h"   / "N hr"
+ *   - "in the last N day(s)"
+ *   - "right now" / "currently" / "at the moment"  → -5m
+ */
+export function tightenEarliestFromPrompt(question: string): string | null {
+  const q = question.toLowerCase();
+  // Numeric "last N <unit>" / "past N <unit>" patterns. Order
+  // matters — try compound (number + unit) first, then the bare
+  // "right now" forms.
+  const numUnit = q.match(
+    /(?:in\s+the\s+)?(?:last|past)\s+(\d+)\s*(minute|minutes|min|m|hour|hours|hr|hrs|h|day|days|d)\b/,
+  );
+  if (numUnit) {
+    const n = Number(numUnit[1]);
+    if (Number.isFinite(n) && n > 0) {
+      const u = numUnit[2];
+      if (u.startsWith('m')) return `-${n}m`;
+      if (u.startsWith('h')) return `-${n}h`;
+      if (u.startsWith('d')) return `-${n}d`;
+    }
+  }
+  // "Right now" family — without a number, default to a tight 5m
+  // window on the assumption that "now" means "current state".
+  if (
+    /\b(right\s+now|currently|at\s+the\s+moment|in\s+the\s+last\s+(few|couple\s+of)\s+minutes)\b/.test(q)
+  ) {
+    return '-5m';
+  }
+  return null;
 }
 
 /**
