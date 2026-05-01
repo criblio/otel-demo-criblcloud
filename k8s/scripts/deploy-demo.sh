@@ -83,11 +83,17 @@ sed -e "s/__CRIBL_ENDPOINT__/${CRIBL_ENDPOINT}/g" \
 
 echo "✅ Cribl configuration loaded: https://$CRIBL_ENDPOINT"
 
-# Deploy using Helm
+# Deploy using Helm. Server-side apply + force-conflicts so helm can
+# reclaim fields previously owned by kubectl-client-side-apply (e.g.,
+# from flagd-set.sh runtime patches or one-off kubectl edits). Note:
+# this means flag-state changes via flagd-set.sh do NOT survive a
+# subsequent helm upgrade — the chart's defaults win.
 echo "📦 Deploying OpenTelemetry demo with Helm..."
 helm upgrade --install opentelemetry-demo open-telemetry/opentelemetry-demo \
     --namespace otel-demo \
     --values "$VALUES_FILE" \
+    --server-side=true \
+    --force-conflicts \
     --wait --timeout=600s
 
 # Wait for deployment to be ready

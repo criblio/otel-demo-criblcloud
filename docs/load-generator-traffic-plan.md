@@ -92,16 +92,40 @@ processor would be a small cleanup.
 Doing this across all ~10 service languages is real work. Suggested
 phasing:
 
-1. **Phase 1a — load gen + frontend BFF (Node.js).** These cover the
-   request entry points; tagging spans here gives us session.id on the
-   "first hop" trace root for both Locust and PlaywrightUser flows.
-2. **Phase 1b — high-value backend services**: cart, checkout, payment,
-   recommendation. These are the services the APM app demos against most
-   often.
+1. **Phase 1a — load gen (Python).** Tag spans at the request entry
+   point so every outgoing HTTP request carries `session.id` baggage.
+2. **Phase 1b — high-value backend services + frontend BFF**: cart
+   (.NET), checkout (Go), payment (Node.js), recommendation (Python),
+   frontend BFF (Node.js). Promote the inbound baggage to span
+   attributes so APM-side queries can group by `session.id`.
 3. **Phase 1c — everyone else**, only if needed.
 
 Each phase ships independently. Stop early if the APM app's session
 grouping is already useful after 1a/1b.
+
+#### Phase 1a — what actually shipped
+
+Phase 1a turned out to be **two patches**, not one:
+
+1. **`BaggageSpanProcessor` wired in.** Adds
+   `opentelemetry-processor-baggage` to the load gen's `TracerProvider`
+   with a `session.id`-only allowlist. Stamps `session.id` on every
+   span where it's present in the active baggage context.
+2. **Locustfile baggage-context fix.** Upstream's locustfile attaches
+   baggage in `on_start()` then opens every task span with
+   `context=Context()` — an empty parent context — which **replaces the
+   active context** for the duration of the `with` block, nuking the
+   baggage before HTTP requests fire. Our overlay stashes the baggage'd
+   context as `self.session_context` and threads it through every
+   `start_as_current_span` call. Preserves "each task is a separate
+   trace root" semantics while letting baggage flow.
+
+Both patches live on `cribl/baggage-span-processor` in the fork.
+Verified end-to-end on 2026-05-01: `session.id` appears on
+load-generator spans (366/3min) and propagates via the `baggage:` HTTP
+header to the Ad service (which has manual baggage→attribute code
+upstream — proving the propagation works for any service that wants to
+read it).
 
 ### 2. (Subsumed into #1.)
 
@@ -151,13 +175,13 @@ these flows naturally diversify session-tagged spans.
    service. Set up a long-lived Cribl branch and a build pipeline for at
    least the load-generator image; other service images can use upstream
    until we touch them. Settle GHCR-vs-internal-registry hosting up front.
-2. **#1 Phase 1a — load generator + frontend BFF.** Add
-   `BaggageSpanProcessor` to the Python load gen and the Node.js frontend.
-   Verify `session.id` shows up on the entry-point spans for both
-   `HttpUser` and `PlaywrightUser` flows.
-3. **#1 Phase 1b — cart, checkout, payment, recommendation.** Most
-   APM-relevant downstream services. After this, the APM app should be
-   able to group most traces by session.
+2. **#1 Phase 1a — load generator (Python).** ✅ Shipped 2026-05-01.
+   Two patches on `cribl/baggage-span-processor`:
+   `BaggageSpanProcessor` wired in + locustfile baggage-context fix.
+3. **#1 Phase 1b — cart (.NET), checkout (Go), payment (Node.js),
+   recommendation (Python), frontend BFF (Node.js).** Most APM-relevant
+   downstream services + the frontend's server side. After this, the APM
+   app should be able to group most traces by session.
 4. **#4 — diversify request attributes**, including occasional invalid
    product IDs / malformed payloads to drive 4xx error traffic.
 5. **#3 — non-uniform traffic shape via `LoadTestShape` + persona-based
