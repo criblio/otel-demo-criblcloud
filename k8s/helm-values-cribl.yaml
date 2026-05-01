@@ -10,7 +10,7 @@ components:
   load-generator:
     imageOverride:
       repository: ghcr.io/criblio/opentelemetry-demo
-      tag: b18ffba-load-generator
+      tag: 9e0f6bd-load-generator
       pullPolicy: IfNotPresent
     # Browser traffic is heavy in kind — keeps PlaywrightUser disabled.
     env:
