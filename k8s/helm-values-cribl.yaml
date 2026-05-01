@@ -1,6 +1,31 @@
 # Helm values to configure OpenTelemetry demo with Cribl Stream integration
 # This file will be processed by the setup script to substitute variables
 
+# Override individual components with Cribl-built images. Tags are tied to
+# commits on long-lived branches in criblio/opentelemetry-demo (see
+# docs/opentelemetry-demo-fork.md). For local dev, the image must be built
+# and loaded into the kind cluster (kind load docker-image ...) before
+# deploy; for shared environments, the image must exist on GHCR.
+components:
+  load-generator:
+    imageOverride:
+      repository: ghcr.io/criblio/opentelemetry-demo
+      tag: ff0c903-load-generator
+      pullPolicy: IfNotPresent
+    # Browser traffic is heavy in kind — keeps PlaywrightUser disabled.
+    env:
+      - name: LOCUST_BROWSER_TRAFFIC_ENABLED
+        value: "false"
+
+  # Lower memory ceiling than the (unset) chart default — product-catalog is
+  # a Go service whose footprint matters in the local kind cluster.
+  product-catalog:
+    resources:
+      limits:
+        memory: 128Mi
+      requests:
+        memory: 128Mi
+
 opentelemetry-collector:
   config:
     exporters:
