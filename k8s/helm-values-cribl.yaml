@@ -13,7 +13,10 @@ components:
       tag: 9e0f6bd-load-generator
       pullPolicy: IfNotPresent
     # Browser traffic is heavy in kind — keeps PlaywrightUser disabled.
-    env:
+    # Use envOverrides (name-keyed merge) rather than env: (full-list
+    # replace) so the chart's 13 LOCUST_* defaults survive — without
+    # them locust idles in `state: ready` with no users.
+    envOverrides:
       - name: LOCUST_BROWSER_TRAFFIC_ENABLED
         value: "false"
 
