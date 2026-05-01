@@ -17,6 +17,34 @@ components:
       - name: LOCUST_BROWSER_TRAFFIC_ENABLED
         value: "false"
 
+  # Phase 1b — services with BaggageSpanProcessor wired in to promote
+  # session.id from inbound baggage to a span attribute.
+  cart:
+    imageOverride:
+      repository: ghcr.io/criblio/opentelemetry-demo
+      tag: 9e0f6bd-cart
+      pullPolicy: IfNotPresent
+  checkout:
+    imageOverride:
+      repository: ghcr.io/criblio/opentelemetry-demo
+      tag: 9e0f6bd-checkout
+      pullPolicy: IfNotPresent
+  payment:
+    imageOverride:
+      repository: ghcr.io/criblio/opentelemetry-demo
+      tag: 9e0f6bd-payment
+      pullPolicy: IfNotPresent
+  recommendation:
+    imageOverride:
+      repository: ghcr.io/criblio/opentelemetry-demo
+      tag: 9e0f6bd-recommendation
+      pullPolicy: IfNotPresent
+  frontend:
+    imageOverride:
+      repository: ghcr.io/criblio/opentelemetry-demo
+      tag: 9e0f6bd-frontend
+      pullPolicy: IfNotPresent
+
   # Lower memory ceiling than the (unset) chart default — product-catalog is
   # a Go service whose footprint matters in the local kind cluster.
   product-catalog:
