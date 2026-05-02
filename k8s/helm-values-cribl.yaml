@@ -25,7 +25,7 @@ components:
   cart:
     imageOverride:
       repository: ghcr.io/criblio/opentelemetry-demo
-      tag: 9e0f6bd-cart
+      tag: cc516d6-cart
       pullPolicy: IfNotPresent
   checkout:
     imageOverride:
