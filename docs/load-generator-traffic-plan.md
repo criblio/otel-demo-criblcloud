@@ -246,7 +246,18 @@ these flows naturally diversify session-tagged spans.
    section: NOT tagged with synthetic-marker baggage — the APM app
    must surface/group/silence these on its own merits.
 5. **#3 — non-uniform traffic shape via `LoadTestShape` + persona-based
-   `HttpUser` classes.**
+   `HttpUser` classes.** ✅ Shipped 2026-05-01. Four persona HttpUser
+   classes (Browser w=6 / Buyer w=2 / Abandoner w=2 / Mobile w=3) each
+   with their own task mix and `wait_time`. Mobile is restricted to
+   iPhone/Android `profile_pool`. Task bodies pulled into module-level
+   functions taking `(user)` so personas compose via `tasks={fn:weight}`
+   without inheritance gymnastics. `StagedSpike(LoadTestShape)` adds a
+   deterministic 10-min cycle: warm 5 → ramp 15 → peak 25 → cool 10 →
+   idle 5 users (deterministic per the open question — easier to validate
+   APM features against a known curve than against random load).
+   Verified 2026-05-01: at pod-age 27s locust showed 5 users, at 6m27s
+   showed 10 (matching warm-up + cool-down stages); cart ops show the
+   full task mix; Mobile UA share matched its weighted spawn ratio.
 6. **#1 Phase 1c — remaining services**, only if the APM app still needs
    broader coverage.
 
@@ -273,8 +284,10 @@ Treat #4 as a forcing function for the APM app's noise-handling.
 
 - Do we want `session.id` on logs and metrics too? (Logs: yes, for log
   correlation. Metrics: probably not — high cardinality.)
-- For #3, do we want the load shape to be deterministic (same pattern
+- ~~For #3, do we want the load shape to be deterministic (same pattern
   every day, easy to validate APM features against) or randomized (more
-  realistic-looking)?
+  realistic-looking)?~~ Decided 2026-05-01: deterministic
+  (`StagedSpike` 10-min cycle). Randomized variants can be layered
+  later if the APM app needs them.
 - Fork hosting: do we publish the custom load-generator image to GHCR
   under `criblio/`, or to an internal Cribl registry?
