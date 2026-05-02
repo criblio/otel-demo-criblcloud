@@ -236,8 +236,15 @@ these flows naturally diversify session-tagged spans.
    StackExchange.Redis multiplexer threads, Redis instrumentation's
    batched flush timer) — see the "Phase 1b — what actually shipped"
    subsection above.
-4. **#4 — diversify request attributes**, including occasional invalid
-   product IDs / malformed payloads to drive 4xx error traffic.
+4. **#4 — diversify request attributes.** ✅ Shipped 2026-05-01. Adds
+   per-user (Accept-Language, User-Agent) personas across desktop /
+   mobile / a small slice of bot UAs; per-user `currencyCode` weighted
+   toward USD; weighted product selection (Pareto-style head/tail);
+   and a low-weight `bad_request` task that hits invalid product IDs
+   (`DEADBEEF99`, `NOTAPRODUCT`, `12345`, `../../etc/passwd`, `%00`)
+   producing a steady ~10% 4xx trickle. Per the "Downstream impact"
+   section: NOT tagged with synthetic-marker baggage — the APM app
+   must surface/group/silence these on its own merits.
 5. **#3 — non-uniform traffic shape via `LoadTestShape` + persona-based
    `HttpUser` classes.**
 6. **#1 Phase 1c — remaining services**, only if the APM app still needs
