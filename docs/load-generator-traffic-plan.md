@@ -127,6 +127,56 @@ header to the Ad service (which has manual baggage→attribute code
 upstream — proving the propagation works for any service that wants to
 read it).
 
+#### Phase 1b — what actually shipped
+
+Wired the contrib `BaggageSpanProcessor` (or hand-rolled equivalent) into
+five services. Verified 2026-05-01 against a steady-state ~10-user
+locust load over a 2-min window, all on `cribl/baggage-span-processor`:
+
+| Service        | session.id coverage |
+|----------------|---------------------|
+| load-generator | 63/63   (100%)      |
+| cart           | 147/147 (100%)      |
+| checkout       | 416/416 (100%)      |
+| payment        | 60/60   (100%)      |
+| recommendation | 90/90   (100%)      |
+| frontend       | 187/187 (100%)      |
+
+Most services were a one-liner: drop in the language-native contrib
+`BaggageSpanProcessor` with a `session.id`-only allowlist.
+
+**Cart (.NET) was three layered fixes**, each of which would not have
+been obvious without empirical iteration:
+
+1. **`OnEnd` instead of `OnStart`.** OpenTelemetry .NET's
+   `AspNetCoreInstrumentation` creates the inbound server `Activity`
+   *before* its `HttpInListener` observes the diagnostic event and
+   extracts baggage from headers into `Baggage.Current`. So the
+   processor's `OnStart` sees an empty bag for the server span. By
+   `OnEnd`, extraction has run.
+2. **`EnrichWithHttpRequest` callback that captures into a
+   process-static `SessionScope` table keyed by `ActivityTraceId`.**
+   `StackExchange.Redis` dispatches Redis commands via a
+   `ConnectionMultiplexer` whose worker threads sit outside the
+   request's `AsyncLocal` flow, so `Baggage.Current` is empty in those
+   threads even at `OnEnd`. The Enrich callback runs on the request's
+   async context (after baggage extraction), so it can stash the
+   value where any descendant span can find it by trace ID.
+3. **TTL-based eviction (1 minute), not release-on-root-end.**
+   `OpenTelemetry.Instrumentation.StackExchangeRedis` batches its
+   profiler-entry-to-`Activity` conversion via a Timer (default
+   `FlushInterval = 10s`), so Redis spans are created seconds *after*
+   the originating request has already completed. Releasing the
+   `SessionScope` entry on root-span `OnEnd` deleted it just before
+   the deferred Redis spans came looking. A sliding TTL longer than
+   the flush window keeps the entry alive until the spans land.
+
+The cart fix lives in `src/cart/src/Telemetry/BaggageSpanProcessor.cs`
+(processor + `SessionScope`) and `src/cart/src/Program.cs` (the
+`AddAspNetCoreInstrumentation` Enrich callback). Other services use
+the off-the-shelf processor without a fallback because their language
+runtimes don't have either of these gotchas.
+
 ### 2. (Subsumed into #1.)
 
 The original #2 — stamping `session.id` on the Locust-emitted spans —
@@ -179,9 +229,13 @@ these flows naturally diversify session-tagged spans.
    Two patches on `cribl/baggage-span-processor`:
    `BaggageSpanProcessor` wired in + locustfile baggage-context fix.
 3. **#1 Phase 1b — cart (.NET), checkout (Go), payment (Node.js),
-   recommendation (Python), frontend BFF (Node.js).** Most APM-relevant
-   downstream services + the frontend's server side. After this, the APM
-   app should be able to group most traces by session.
+   recommendation (Python), frontend BFF (Node.js).** ✅ Shipped
+   2026-05-01. All five services + load-generator at 100% session.id
+   coverage in steady state. Cart took three iterations over a .NET-
+   specific timing chain (OnStart vs OnEnd, AsyncLocal flow across
+   StackExchange.Redis multiplexer threads, Redis instrumentation's
+   batched flush timer) — see the "Phase 1b — what actually shipped"
+   subsection above.
 4. **#4 — diversify request attributes**, including occasional invalid
    product IDs / malformed payloads to drive 4xx error traffic.
 5. **#3 — non-uniform traffic shape via `LoadTestShape` + persona-based
