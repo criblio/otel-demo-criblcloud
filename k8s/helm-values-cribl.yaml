@@ -57,6 +57,38 @@ components:
       requests:
         memory: 128Mi
 
+  # Chart default is 100Mi which postgres 17.6 cannot sustain — OOMKill
+  # crashloop under any real query load (203 restarts observed in 20h
+  # under demo traffic). Bump to give shared_buffers + WAL + connection
+  # backends room to breathe.
+  postgresql:
+    resources:
+      limits:
+        memory: 512Mi
+      requests:
+        memory: 256Mi
+
+  # Chart default is 20Mi — currency is a C++ service but 20Mi can't
+  # cover the OTLP exporter buffer + gRPC server under load (2508
+  # restarts in 47d observed). The crashloop manifests upstream as
+  # checkout-side "failed to convert price" errors with confusing
+  # product/currency text, not as a clear currency outage.
+  currency:
+    resources:
+      limits:
+        memory: 128Mi
+      requests:
+        memory: 64Mi
+
+  # Chart default is 120Mi which is insufficient for the Kafka
+  # consumer + OTel SDK runtime (6674 restarts in 47d observed).
+  accounting:
+    resources:
+      limits:
+        memory: 256Mi
+      requests:
+        memory: 128Mi
+
 opentelemetry-collector:
   config:
     exporters:
