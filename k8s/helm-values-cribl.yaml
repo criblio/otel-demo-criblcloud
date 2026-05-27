@@ -68,17 +68,18 @@ components:
       requests:
         memory: 256Mi
 
-  # Chart default is 20Mi — currency is a C++ service but 20Mi can't
-  # cover the OTLP exporter buffer + gRPC server under load (2508
-  # restarts in 47d observed). The crashloop manifests upstream as
-  # checkout-side "failed to convert price" errors with confusing
-  # product/currency text, not as a clear currency outage.
+  # Chart default is 20Mi — currency is a C++ service but its OTLP-cpp
+  # exporter buffer scales with span throughput. 128Mi still OOMKilled
+  # 16 times in 12h under LoadTestShape traffic + per-user currency
+  # diversity. 256Mi gives clean margin. The crashloop manifests
+  # upstream as checkout-side "failed to convert price" errors with
+  # confusing product/currency text, not as a clear currency outage.
   currency:
     resources:
       limits:
-        memory: 128Mi
+        memory: 256Mi
       requests:
-        memory: 64Mi
+        memory: 128Mi
 
   # Chart default is 120Mi which is insufficient for the Kafka
   # consumer + OTel SDK runtime (6674 restarts in 47d observed).
