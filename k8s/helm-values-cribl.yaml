@@ -73,6 +73,24 @@ components:
       requests:
         memory: 256Mi
 
+  # Chart default is 65Mi. Envoy needs that just for its binary
+  # footprint plus connection-pool bookkeeping to each upstream
+  # cluster. Under sustained load the proxy spent its life
+  # memory-pressured: it OOMKilled once (Exit 137) and otherwise
+  # constantly ran into envoy's overload manager, dropping new
+  # connections (UT/UC/UR response flags). The mistaken diagnosis
+  # chain — "envoy 504s, BFF must be slow" — held for an entire
+  # day because the proxy's failures presented at upstream-cluster
+  # boundaries even though the constraint was the proxy itself.
+  # Bumping to 256Mi reduced steady-state 5xx from ~20% to ~2%
+  # and eliminated UT/UC entirely over a LoadTestShape cycle.
+  frontend-proxy:
+    resources:
+      limits:
+        memory: 256Mi
+      requests:
+        memory: 128Mi
+
   # Chart default is 100Mi which postgres 17.6 cannot sustain — OOMKill
   # crashloop under any real query load (203 restarts observed in 20h
   # under demo traffic). Bump to give shared_buffers + WAL + connection
