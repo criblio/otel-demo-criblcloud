@@ -123,14 +123,29 @@ components:
       requests:
         memory: 128Mi
 
-  # Chart default is 120Mi which is insufficient for the Kafka
-  # consumer + OTel SDK runtime (6674 restarts in 47d observed).
+  # Memory: chart default 120Mi → 256Mi (first bump) → 512Mi (Exit 137
+  # observed at 256Mi too). .NET runtime + Confluent.Kafka + EF Core +
+  # Npgsql + OTel SDK is heavier than expected.
+  #
+  # Image: cribl/accounting-idempotency fork branch fixes the
+  # correctness half of the bug — every OOMKill in the past was
+  # replaying kafka messages whose orders were already written to
+  # Postgres, hitting order_pkey 23505 on insert. The fork:
+  #   - Pre-checks Orders.Any(o => o.Id == order.OrderId)
+  #   - Catches DbUpdateException with SqlState 23505 as idempotent
+  #   - EnableAutoCommit=false + manual _consumer.Commit on success
+  # Without the patch the memory bump only masks the symptom; the
+  # next consumer rebalance reintroduces the 23505 storm.
   accounting:
+    imageOverride:
+      repository: ghcr.io/criblio/opentelemetry-demo
+      tag: dd3c7c9-accounting
+      pullPolicy: IfNotPresent
     resources:
       limits:
-        memory: 256Mi
+        memory: 512Mi
       requests:
-        memory: 128Mi
+        memory: 256Mi
 
 opentelemetry-collector:
   # Chart default 200Mi gets OOMKilled aggregating trace/metric/log
