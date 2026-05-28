@@ -57,6 +57,22 @@ components:
       requests:
         memory: 128Mi
 
+  # Chart default is 250Mi which is too tight for a Node.js BFF at 3
+  # replicas absorbing the LoadTestShape 25-user peak. Under V8 GC
+  # pressure the pod stalls at the TCP-accept layer — envoy upstream
+  # timeouts (UT response flag) fire on /api/products, /api/cart,
+  # /api/recommendations, /api/data while the BFF's own server spans
+  # report sub-25ms (because those spans only count requests that
+  # reach the handler — connection-level stalls are invisible to
+  # frontend's span data).
+  frontend:
+    replicas: 3
+    resources:
+      limits:
+        memory: 512Mi
+      requests:
+        memory: 256Mi
+
   # Chart default is 100Mi which postgres 17.6 cannot sustain — OOMKill
   # crashloop under any real query load (203 restarts observed in 20h
   # under demo traffic). Bump to give shared_buffers + WAL + connection
@@ -99,6 +115,18 @@ components:
         memory: 128Mi
 
 opentelemetry-collector:
+  # Chart default 200Mi gets OOMKilled aggregating trace/metric/log
+  # pipelines for the whole demo at LoadTestShape peak — observed
+  # exit-code-137 restarts plus intermittent liveness-probe timeouts.
+  # When the collector dies, all service OTel SDKs back up briefly,
+  # which has cascaded into front-end TCP-accept stalls and the
+  # mysterious "envoy 504 with no downstream errors" pattern.
+  resources:
+    limits:
+      memory: 1Gi
+    requests:
+      memory: 512Mi
+
   config:
     exporters:
       # Base chart exporters that pipelines reference
