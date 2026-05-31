@@ -22,11 +22,31 @@ components:
 
   # Phase 1b — services with BaggageSpanProcessor wired in to promote
   # session.id from inbound baggage to a span attribute.
+  #
+  # 08daf03-cart bundles the Phase 1b BaggageSpanProcessor chain
+  # (cribl/baggage-span-processor: 47b97d4 + 9e0f6bd + cc516d6 +
+  # 9102088 + 0a07691) PLUS an HTTP /healthz endpoint that honors
+  # the failedReadinessProbe flagd flag, PLUS a Kestrel multiplex
+  # setting (Http1AndHttp2) so k8s HTTP/1.x probes can reach the
+  # endpoint on the same gRPC port. Upstream's path through
+  # readinessCheck + custom gRPC HealthServiceImpl silently
+  # returns SERVING regardless of flag value on .NET 10, so the
+  # documented demo failure scenario silently no-ops. See
+  # cribl/cart-readiness-probe in the fork.
   cart:
     imageOverride:
       repository: ghcr.io/criblio/opentelemetry-demo
-      tag: 0a07691-cart
+      tag: 08daf03-cart
       pullPolicy: IfNotPresent
+    readinessProbe:
+      httpGet:
+        path: /healthz
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+      successThreshold: 1
   checkout:
     imageOverride:
       repository: ghcr.io/criblio/opentelemetry-demo
