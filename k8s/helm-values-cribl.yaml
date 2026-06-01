@@ -23,30 +23,24 @@ components:
   # Phase 1b — services with BaggageSpanProcessor wired in to promote
   # session.id from inbound baggage to a span attribute.
   #
-  # 08daf03-cart bundles the Phase 1b BaggageSpanProcessor chain
-  # (cribl/baggage-span-processor: 47b97d4 + 9e0f6bd + cc516d6 +
-  # 9102088 + 0a07691) PLUS an HTTP /healthz endpoint that honors
-  # the failedReadinessProbe flagd flag, PLUS a Kestrel multiplex
-  # setting (Http1AndHttp2) so k8s HTTP/1.x probes can reach the
-  # endpoint on the same gRPC port. Upstream's path through
-  # readinessCheck + custom gRPC HealthServiceImpl silently
-  # returns SERVING regardless of flag value on .NET 10, so the
-  # documented demo failure scenario silently no-ops. See
-  # cribl/cart-readiness-probe in the fork.
+  # The cart-readiness-probe attempt (08daf03-cart) is REVERTED.
+  # The Http1AndHttp2 Kestrel change in that image broke h2c
+  # prior-knowledge gRPC — Go gRPC clients (checkout, frontend BFF
+  # going through the cart service path) got
+  # `initial http2 frame from server is not a settings frame:
+  # *http2.GoAwayFrame` on every call. checkout's persistent
+  # connection then stayed half-dead even after a cart revert,
+  # cascading into 100% GetCart errors, no orders placed, payment
+  # and email starved of traffic.
+  #
+  # Proper fix is to expose /healthz on a SEPARATE Kestrel
+  # endpoint with Protocols Http1 (keeping 8080 as Http2-only for
+  # gRPC) — TODO on the cribl/cart-readiness-probe branch.
   cart:
     imageOverride:
       repository: ghcr.io/criblio/opentelemetry-demo
-      tag: 08daf03-cart
+      tag: 0a07691-cart
       pullPolicy: IfNotPresent
-    readinessProbe:
-      httpGet:
-        path: /healthz
-        port: 8080
-      initialDelaySeconds: 5
-      periodSeconds: 10
-      timeoutSeconds: 2
-      failureThreshold: 3
-      successThreshold: 1
   checkout:
     imageOverride:
       repository: ghcr.io/criblio/opentelemetry-demo
