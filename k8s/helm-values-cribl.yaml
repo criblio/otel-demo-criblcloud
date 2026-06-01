@@ -161,6 +161,23 @@ components:
       requests:
         memory: 256Mi
 
+  # Chart default 600Mi → 1.5Gi (limit) / 768Mi (request). Jaeger
+  # all-in-one was OOMKilling roughly every 3 hours (372 restarts in
+  # 53d, latest Exit 137 at 07:00 PDT). Each restart broke the
+  # otel-collector → jaeger OTLP exporter for ~30-60s; the
+  # collector's sending queue piled up retries (worker2 collector
+  # showed 48 export-failed lines for otlp vs only 11 for
+  # otlp/cribl). Span throughput dipped during retry windows in a
+  # way that overlapped with the LoadTestShape idle phase and was
+  # easy to misread as "no spans flowing." 600Mi can't hold the
+  # in-memory trace span buffer at sustained peak load.
+  jaeger:
+    resources:
+      limits:
+        memory: 1500Mi
+      requests:
+        memory: 768Mi
+
 opentelemetry-collector:
   # Chart default 200Mi gets OOMKilled aggregating trace/metric/log
   # pipelines for the whole demo at LoadTestShape peak — observed
