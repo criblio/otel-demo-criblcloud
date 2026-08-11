@@ -75,6 +75,12 @@ if [[ -z "$CRIBL_ENDPOINT" || -z "$CRIBL_USERNAME" || -z "$CRIBL_PASSWORD" ]]; t
     exit 1
 fi
 
+if [[ -z "$OTEL_CHART_VERSION" ]]; then
+    echo "❌ Error: OTEL_CHART_VERSION not set in .env"
+    echo "   Pin this to avoid pulling a breaking latest chart version"
+    exit 1
+fi
+
 AUTH_HEADER=$(echo -n "${CRIBL_USERNAME}:${CRIBL_PASSWORD}" | base64 -w 0)
 
 sed -e "s/__CRIBL_ENDPOINT__/${CRIBL_ENDPOINT}/g" \
@@ -82,6 +88,34 @@ sed -e "s/__CRIBL_ENDPOINT__/${CRIBL_ENDPOINT}/g" \
     "$VALUES_TEMPLATE" > "$VALUES_FILE"
 
 echo "✅ Cribl configuration loaded: https://$CRIBL_ENDPOINT"
+
+# On Apple Silicon, GHCR images are amd64-only. Pull them for the correct
+# platform and load into kind so containerd doesn't reject the manifest.
+CRIBL_IMAGES=(
+    "ghcr.io/criblio/opentelemetry-demo:1fe73d4-load-generator"
+    "ghcr.io/criblio/opentelemetry-demo:0a07691-cart"
+    "ghcr.io/criblio/opentelemetry-demo:9e0f6bd-checkout"
+    "ghcr.io/criblio/opentelemetry-demo:9e0f6bd-payment"
+    "ghcr.io/criblio/opentelemetry-demo:9e0f6bd-recommendation"
+    "ghcr.io/criblio/opentelemetry-demo:9e0f6bd-frontend"
+    "ghcr.io/criblio/opentelemetry-demo:4affae4-currency"
+    "ghcr.io/criblio/opentelemetry-demo:dd3c7c9-accounting"
+)
+
+echo "📥 Pre-pulling Cribl custom images (linux/amd64) and loading into kind..."
+for img in "${CRIBL_IMAGES[@]}"; do
+    docker pull --platform linux/amd64 "$img"
+done
+
+# kind load uses ctr import which rejects amd64 manifests on arm64 nodes.
+# Export to a tar and import with --no-unpack to skip platform validation;
+# containerd unpacks lazily at runtime where Rosetta handles amd64.
+IMAGES_TAR=$(mktemp)
+docker save "${CRIBL_IMAGES[@]}" -o "$IMAGES_TAR"
+for node in $(kind get nodes --name "$CLUSTER_NAME"); do
+    docker exec -i "$node" ctr --namespace=k8s.io images import --no-unpack - < "$IMAGES_TAR"
+done
+rm -f "$IMAGES_TAR"
 
 # Deploy using Helm. Server-side apply + force-conflicts so helm can
 # reclaim fields previously owned by kubectl-client-side-apply (e.g.,
@@ -91,6 +125,7 @@ echo "✅ Cribl configuration loaded: https://$CRIBL_ENDPOINT"
 echo "📦 Deploying OpenTelemetry demo with Helm..."
 helm upgrade --install opentelemetry-demo open-telemetry/opentelemetry-demo \
     --namespace otel-demo \
+    --version "$OTEL_CHART_VERSION" \
     --values "$VALUES_FILE" \
     --server-side=true \
     --force-conflicts \
