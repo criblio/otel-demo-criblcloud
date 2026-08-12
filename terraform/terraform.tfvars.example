@@ -1,0 +1,16 @@
+aws_region     = "us-west-2"
+aws_profile    = "test"
+subnet_id      = "subnet-0bd76e13566f4958d" # aws-controltower-PrivateSubnet2A
+instance_profile_name = "SSMDefault"
+private_ingress_cidr_blocks = ["10.0.0.0/8"]
+ssh_ingress_cidr_blocks = ["10.0.0.0/8"]
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+instance_type  = "m7i.2xlarge"
+
+cribl_endpoint = "default.main.example-org.cribl.cloud:20000"
+cribl_username = "replace-me"
+cribl_password = "replace-me"
+
+# Keep these aligned with the repository/ref you want the instance to run.
+repository_url = "https://github.com/criblio/otel-demo-criblcloud.git"
+repository_ref = "master"

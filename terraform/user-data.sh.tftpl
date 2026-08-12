@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec > >(tee /var/log/otel-demo-bootstrap.log | logger -t otel-demo-bootstrap -s 2>/dev/console) 2>&1
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y docker.io git curl jq openssh-server
+
+# Kind runs several Kubernetes nodes as Docker containers. Raise the default
+# file-descriptor limit before creating them so kube-proxy can handle the demo.
+docker_ulimit_marker=/var/lib/otel-demo-docker-ulimits
+if [ ! -e "$docker_ulimit_marker" ]; then
+  install -d -m 755 /etc/docker
+  docker_config=/etc/docker/daemon.json
+  if [ -s "$docker_config" ]; then
+    temp_config=$(mktemp)
+    jq '."default-ulimits" = ((."default-ulimits" // {}) + {"nofile": {"Name": "nofile", "Hard": 65536, "Soft": 65536}})' "$docker_config" > "$temp_config"
+    install -o root -g root -m 644 "$temp_config" "$docker_config"
+    rm -f "$temp_config"
+  else
+    cat > "$docker_config" <<'DOCKER_CONFIG'
+{
+  "default-ulimits": {
+    "nofile": {
+      "Name": "nofile",
+      "Hard": 65536,
+      "Soft": 65536
+    }
+  }
+}
+DOCKER_CONFIG
+  fi
+  touch "$docker_ulimit_marker"
+  docker_restart_required=true
+else
+  docker_restart_required=false
+fi
+
+systemctl enable --now docker
+if [ "$docker_restart_required" = true ]; then
+  systemctl restart docker
+fi
+systemctl enable --now ssh
+usermod -aG docker ubuntu
+
+cat > /etc/sysctl.d/99-otel-demo.conf <<'SYSCTL'
+fs.inotify.max_user_instances = 1024
+fs.inotify.max_user_watches = 1048576
+SYSCTL
+sysctl --system >/dev/null
+
+install -d -m 700 -o ubuntu -g ubuntu /home/ubuntu/.ssh
+cat >> /home/ubuntu/.ssh/authorized_keys <<'SSHKEY'
+${ssh_public_key}
+SSHKEY
+chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
+chmod 600 /home/ubuntu/.ssh/authorized_keys
+
+install -d -o ubuntu -g ubuntu /home/ubuntu/otel-demo-criblcloud
+if [ ! -d /home/ubuntu/otel-demo-criblcloud/.git ]; then
+  sudo -u ubuntu git clone --branch '${repository_ref}' '${repository_url}' /home/ubuntu/otel-demo-criblcloud
+else
+  sudo -u ubuntu git -C /home/ubuntu/otel-demo-criblcloud fetch --all
+  sudo -u ubuntu git -C /home/ubuntu/otel-demo-criblcloud checkout '${repository_ref}'
+  sudo -u ubuntu git -C /home/ubuntu/otel-demo-criblcloud pull --ff-only
+fi
+
+# Keep older repository revisions from passing kubectl-only flags to Helm.
+sudo -u ubuntu sed -i \
+  -e '/--server-side=true/d' \
+  -e '/--force-conflicts/d' \
+  /home/ubuntu/otel-demo-criblcloud/k8s/scripts/deploy-demo.sh
+sudo -u ubuntu sed -i \
+  -e 's/^  jaeger:$/jaeger:\n  jaeger:/' \
+  /home/ubuntu/otel-demo-criblcloud/k8s/helm-values-cribl.yaml
+
+curl -fsSLo /usr/local/bin/kind https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+chmod +x /usr/local/bin/kind
+curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.29.2/bin/linux/amd64/kubectl
+chmod +x /usr/local/bin/kubectl
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+cat > /home/ubuntu/otel-demo-criblcloud/.env <<'ENV'
+CRIBL_ENDPOINT=${cribl_endpoint}
+CRIBL_USERNAME=${cribl_username}
+CRIBL_PASSWORD=${cribl_password}
+OTEL_CHART_VERSION=0.40.9
+ENV
+chown ubuntu:ubuntu /home/ubuntu/otel-demo-criblcloud/.env
+chmod 600 /home/ubuntu/otel-demo-criblcloud/.env
+
+until sudo -u ubuntu docker info >/dev/null 2>&1; do sleep 2; done
+sudo -u ubuntu bash -lc 'cd /home/ubuntu/otel-demo-criblcloud && ./k8s/scripts/setup-demo.sh'

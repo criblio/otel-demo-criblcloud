@@ -14,3 +14,10 @@ Thumbs.db
 k8s/bin
 k8s/backups
 k8s/helm-values-processed.yaml
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+!terraform/terraform.tfvars.example
