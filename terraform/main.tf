@@ -105,3 +105,9 @@ resource "aws_instance" "demo" {
     ignore_changes = [tags, tags_all]
   }
 }
+
+resource "aws_ec2_tag" "permanent" {
+  resource_id = aws_instance.demo.id
+  key         = "Permanent"
+  value       = "true"
+}
