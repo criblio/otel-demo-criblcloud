@@ -146,6 +146,12 @@ nohup kubectl port-forward --address 0.0.0.0 svc/jaeger 16686:16686 -n otel-demo
 nohup kubectl port-forward --address 0.0.0.0 svc/grafana 3000:80 -n otel-demo > /dev/null 2>&1 &
 nohup kubectl port-forward --address 0.0.0.0 svc/prometheus 9090:9090 -n otel-demo > /dev/null 2>&1 &
 nohup kubectl port-forward --address 0.0.0.0 svc/opensearch 9300:9300 -n otel-demo > /dev/null 2>&1 &
+# flagd-ui (port 4000 on svc/flagd). The APM repo's eval harness drives the
+# failure scenarios through its /api/read + /api/write endpoints and defaults
+# to FLAGD_UI_URL=http://localhost:4000. Note the demo's own flag UI is also
+# reachable without this forward, at http://localhost:8080/feature — Envoy in
+# frontend-proxy already routes /feature to flagd-ui:4000.
+nohup kubectl port-forward --address 0.0.0.0 svc/flagd 4000:4000 -n otel-demo > /dev/null 2>&1 &
 
 # Wait a bit for port forwards to establish
 sleep 3
@@ -158,6 +164,7 @@ echo "   Frontend:   http://localhost:8080"
 echo "   Jaeger UI:  http://localhost:16686"
 echo "   Grafana:    http://localhost:3000"
 echo "   Prometheus: http://localhost:9090"
+echo "   flagd UI:   http://localhost:4000  (also at http://localhost:8080/feature)"
 echo ""
 echo "🔍 Monitor the cluster:"
 echo "   kubectl get pods -n otel-demo"
