@@ -1,6 +1,13 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: otel-demo-cribl
+# Running inside an unprivileged LXC container: /dev/kmsg can't be opened
+# there, so the kubelet must skip its kmsg-based OOM watcher.
+kubeadmConfigPatches:
+- |
+  kind: KubeletConfiguration
+  featureGates:
+    KubeletInUserNamespace: true
 nodes:
 - role: control-plane
   image: kindest/node:v1.29.2

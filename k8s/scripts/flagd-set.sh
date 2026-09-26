@@ -15,21 +15,57 @@ NAMESPACE="otel-demo"
 FLAG_NAME="$1"
 VARIANT="$2"
 
-if [[ -z "$FLAG_NAME" || -z "$VARIANT" ]]; then
+# Print the flag list from the live ConfigMap when we can reach it, so this
+# never drifts from what is actually deployed. The chart ships different flag
+# sets across versions (the LLM and readiness-probe scenarios are recent
+# additions), so a hardcoded list goes stale silently.
+usage() {
     echo "Usage: $0 <flag-name> <variant>"
     echo ""
     echo "Available flags and variants:"
-    echo "  paymentFailure       : 100%, 90%, 75%, 50%, 25%, 10%, off"
-    echo "  paymentUnreachable   : on, off"
-    echo "  cartFailure          : on, off"
-    echo "  productCatalogFailure: on, off"
-    echo "  recommendationCache  : on, off"
-    echo "  adFailure            : on, off"
-    echo "  adHighCpu            : on, off"
-    echo "  adManualGc           : on, off"
-    echo "  kafkaQueueProblems   : on, off"
-    echo "  imageSlowLoad        : 10sec, 5sec, off"
-    echo "  loadGeneratorFlood   : on, off"
+
+    local cm json
+    cm=$(kubectl get configmap -n "$NAMESPACE" -o name 2>/dev/null | grep flagd | head -1)
+    if [[ -n "$cm" ]]; then
+        json=$(kubectl get "$cm" -n "$NAMESPACE" -o jsonpath='{.data.demo\.flagd\.json}' 2>/dev/null)
+    fi
+
+    if [[ -n "$json" ]]; then
+        echo "$json" | python3 -c "
+import sys, json, re
+d = json.loads(re.sub(r'^\s*//.*$', '', sys.stdin.read(), flags=re.M))
+flags = d['flags']
+width = max(len(f) for f in flags)
+for name, spec in flags.items():
+    variants = ', '.join(spec.get('variants', {}))
+    current = spec.get('defaultVariant', '?')
+    mark = '  <- active' if current not in ('off',) else ''
+    print(f'  {name:{width}} : {variants}   [now: {current}]{mark}')
+"
+    else
+        # Fallback when the cluster is unreachable. Matches the chart pinned in
+        # .env as of this writing; run against a live cluster for the truth.
+        echo "  (cluster unreachable - showing last-known list)"
+        echo "  paymentFailure             : 100%, 90%, 75%, 50%, 25%, 10%, off"
+        echo "  paymentUnreachable         : on, off"
+        echo "  cartFailure                : on, off"
+        echo "  productCatalogFailure      : on, off"
+        echo "  recommendationCacheFailure : on, off"
+        echo "  adFailure                  : on, off"
+        echo "  adHighCpu                  : on, off"
+        echo "  adManualGc                 : on, off"
+        echo "  kafkaQueueProblems         : on, off"
+        echo "  imageSlowLoad              : 10sec, 5sec, off"
+        echo "  loadGeneratorFloodHomepage : on, off"
+        echo "  failedReadinessProbe       : on, off"
+        echo "  emailMemoryLeak            : off, 1x, 10x, 100x, 1000x, 10000x"
+        echo "  llmInaccurateResponse      : off, on"
+        echo "  llmRateLimitError          : off, on"
+    fi
+}
+
+if [[ -z "$FLAG_NAME" || -z "$VARIANT" ]]; then
+    usage
     exit 1
 fi
 
