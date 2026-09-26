@@ -36,6 +36,17 @@ Run steps individually if preferred:
 - **Jaeger UI**: http://localhost:16686
 - **Grafana**: http://localhost:3000
 - **Prometheus**: http://localhost:9090
+- **flagd UI**: http://localhost:4000 — also served at http://localhost:8080/feature,
+  which needs no separate port forward (Envoy in `frontend-proxy` routes `/feature`
+  to `flagd-ui:4000`). The dedicated `:4000` forward exists because the APM repo's
+  eval harness talks to `/api/read` and `/api/write` directly and defaults to
+  `FLAGD_UI_URL=http://localhost:4000`.
+
+> On the private AWS deployment (`terraform/`), the security group only admits
+> **8080** and **22**. Port 4000 is not reachable across the network even with the
+> forward running — use `/feature` on 8080, or tunnel 4000 over SSM
+> (`aws ssm start-session --document-name AWS-StartPortForwardingSession`), which
+> needs the `session-manager-plugin` installed locally.
 
 ## Data Flow
 
