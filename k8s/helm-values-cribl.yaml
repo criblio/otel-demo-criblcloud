@@ -71,6 +71,15 @@ components:
       requests:
         memory: 128Mi
 
+  # Chart default is 300Mi which OOMKills the JVM on startup once the
+  # otel javaagent is attached — the pod never gets past agent init.
+  fraud-detection:
+    resources:
+      limits:
+        memory: 512Mi
+      requests:
+        memory: 300Mi
+
   # Chart default is 250Mi which is too tight for a Node.js BFF at 3
   # replicas absorbing the LoadTestShape 25-user peak. Under V8 GC
   # pressure the pod stalls at the TCP-accept layer — envoy upstream
